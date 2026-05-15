@@ -1,0 +1,82 @@
+{
+  "name": "ai-usage-tracker",
+  "displayName": "AI Usage Tracker",
+  "description": "Auto-detect and track usage metrics for all AI coding tools in VS Code",
+  "version": "0.3.0",
+  "publisher": "yzy1129",
+  "author": {
+    "name": "yzy"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yzy1129/AI-Usage-Tracker.git"
+  },
+  "homepage": "https://github.com/yzy1129/AI-Usage-Tracker",
+  "bugs": {
+    "url": "https://github.com/yzy1129/AI-Usage-Tracker/issues"
+  },
+  "keywords": [
+    "ai",
+    "usage",
+    "tracker",
+    "tokens",
+    "claude",
+    "copilot",
+    "kilo",
+    "codex",
+    "metrics",
+    "status-bar"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "icon": "icon.png",
+  "categories": ["Other", "Visualization"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "aiTracker.showDashboard",
+        "title": "AI Tracker: Open Dashboard"
+      },
+      {
+        "command": "aiTracker.refresh",
+        "title": "AI Tracker: Refresh Metrics"
+      },
+      {
+        "command": "aiTracker.switchSession",
+        "title": "AI Tracker: Switch Session"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ai-usage-tracker",
+          "title": "AI Usage",
+          "icon": "$(hubot)"
+        }
+      ]
+    },
+    "views": {
+      "ai-usage-tracker": [
+        {
+          "type": "webview",
+          "id": "aiTracker.dashboard",
+          "name": "AI Usage Dashboard"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  }
+}
