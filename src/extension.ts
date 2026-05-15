@@ -15,6 +15,13 @@ export function activate(context: vscode.ExtensionContext) {
   const providers = detection.detectAndStart();
   aggregator.setProviders(providers);
 
+  detection.onProvidersChanged((updatedProviders) => {
+    aggregator.setProviders(updatedProviders);
+    const metrics = aggregator.getAggregated();
+    statusBar.update(metrics);
+    dashboard.update(metrics);
+  });
+
   aggregator.onMetricsChanged((metrics) => {
     statusBar.update(metrics);
     dashboard.update(metrics);

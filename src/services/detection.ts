@@ -18,6 +18,10 @@ const SPECIALIZED_FACTORIES: Record<string, ProviderFactory> = {
 
 export class DetectionService implements vscode.Disposable {
   private providers: AIProvider[] = [];
+  private _onProvidersChanged = new vscode.EventEmitter<AIProvider[]>();
+  readonly onProvidersChanged = this._onProvidersChanged.event;
+  private activationCheckTimer: NodeJS.Timeout | undefined;
+  private loadedExtensionIds = new Set<string>();
 
   constructor(private context: vscode.ExtensionContext) {}
 
@@ -33,11 +37,41 @@ export class DetectionService implements vscode.Disposable {
           : new GenericAIProvider(this.context, def);
         provider.start();
         this.providers.push(provider);
+        def.extensionIds.forEach(id => this.loadedExtensionIds.add(id));
       }
     }
 
     this.scanUnknownAIExtensions();
+    this.startActivationWatcher();
     return this.providers;
+  }
+
+  private startActivationWatcher() {
+    this.activationCheckTimer = setInterval(() => {
+      this.checkForNewActivations();
+    }, 5000);
+  }
+
+  private checkForNewActivations() {
+    for (const def of KNOWN_AI_EXTENSIONS) {
+      if (def.extensionIds.some(id => this.loadedExtensionIds.has(id))) {continue;}
+
+      const isInstalled = def.extensionIds.some(id => {
+        const ext = vscode.extensions.getExtension(id);
+        return ext?.isActive;
+      });
+
+      if (isInstalled) {
+        const factory = SPECIALIZED_FACTORIES[def.toolId];
+        const provider = factory
+          ? factory(this.context, def)
+          : new GenericAIProvider(this.context, def);
+        provider.start();
+        this.providers.push(provider);
+        def.extensionIds.forEach(id => this.loadedExtensionIds.add(id));
+        this._onProvidersChanged.fire(this.providers);
+      }
+    }
   }
 
   private scanUnknownAIExtensions() {
@@ -60,6 +94,7 @@ export class DetectionService implements vscode.Disposable {
 
     for (const ext of vscode.extensions.all) {
       if (knownIds.has(ext.id)) {continue;}
+      if (this.loadedExtensionIds.has(ext.id)) {continue;}
       const pkg = ext.packageJSON;
       if (!pkg) {continue;}
 
@@ -85,6 +120,7 @@ export class DetectionService implements vscode.Disposable {
         const provider = new GenericAIProvider(this.context, def);
         provider.start();
         this.providers.push(provider);
+        this.loadedExtensionIds.add(ext.id);
       }
     }
   }
@@ -94,7 +130,9 @@ export class DetectionService implements vscode.Disposable {
   }
 
   dispose(): void {
+    if (this.activationCheckTimer) { clearInterval(this.activationCheckTimer); }
     for (const p of this.providers) { p.dispose(); }
     this.providers = [];
+    this._onProvidersChanged.dispose();
   }
 }

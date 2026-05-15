@@ -28,7 +28,7 @@ export class AggregatorService implements vscode.Disposable {
     this.throttleTimer = setTimeout(() => {
       this.throttleTimer = undefined;
       this._onMetricsChanged.fire(this.getAggregated());
-    }, 1000);
+    }, 300);
   }
 
   getAggregated(): AggregatedMetrics {
