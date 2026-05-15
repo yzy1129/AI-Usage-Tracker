@@ -89,7 +89,7 @@ export class ClaudeCodeProvider extends AIProvider {
     if (!active) {
       return {
         toolId: this.toolId, displayName: this.displayName,
-        isActive: false, lastUpdated: Date.now(),
+        isActive: false, lastUpdated: 0,
         activityCount: 0, activeTimeMs: 0,
         sessions: this.getSessions(), activeSessionId: this.activeSessionId,
       };
@@ -97,7 +97,7 @@ export class ClaudeCodeProvider extends AIProvider {
     const contextMax = active.model ? getContextLimit(active.model) : 200000;
     return {
       toolId: this.toolId, displayName: this.displayName,
-      isActive: true, lastUpdated: Date.now(),
+      isActive: true, lastUpdated: active.lastActive || Date.now(),
       model: active.model || undefined,
       inputTokens: active.totalInputTokens,
       outputTokens: active.totalOutputTokens,

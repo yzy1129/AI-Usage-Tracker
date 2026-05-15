@@ -58,6 +58,19 @@ export class CodexProvider extends AIProvider {
       }),
     );
 
+    this.disposables.push(
+      vscode.window.onDidChangeActiveTerminal((terminal) => {
+        if (terminal && /codex/i.test(terminal.name)) {
+          this.recordActivity();
+        }
+      }),
+      vscode.window.onDidOpenTerminal((terminal) => {
+        if (/codex/i.test(terminal.name)) {
+          this.recordActivity();
+        }
+      }),
+    );
+
     this.pollTimer = setInterval(() => {
       if (this.isExtensionActive() && this.lastActivityTime > 0) {
         const now = Date.now();
@@ -94,7 +107,7 @@ export class CodexProvider extends AIProvider {
       toolId: this.toolId,
       displayName: this.displayName,
       isActive: this.isExtensionActive(),
-      lastUpdated: Date.now(),
+      lastUpdated: this.lastActivityTime || this.sessionStartTime || 0,
       activityCount: this.activityCount,
       sessionStartTime: this.sessionStartTime || undefined,
       activeTimeMs: this.activeTimeMs,

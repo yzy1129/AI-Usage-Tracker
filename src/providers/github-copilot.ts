@@ -94,7 +94,7 @@ export class GitHubCopilotProvider extends AIProvider {
       toolId: this.toolId,
       displayName: this.displayName,
       isActive: this.isExtensionActive(),
-      lastUpdated: Date.now(),
+      lastUpdated: this.lastActivityTime || this.sessionStartTime || 0,
       activityCount: this.activityCount,
       sessionStartTime: this.sessionStartTime || undefined,
       activeTimeMs: this.activeTimeMs,

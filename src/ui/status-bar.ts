@@ -42,7 +42,7 @@ export class StatusBarUI implements vscode.Disposable {
     const primary = metrics.providers.find(p => p.toolId === metrics.primaryProvider);
     const parts: string[] = [];
 
-    parts.push(`$(hubot) ${primary?.model || 'AI'}`);
+    parts.push(`$(hubot) ${primary?.model || primary?.displayName || 'AI'}`);
 
     if (primary?.contextWindowUsed && primary?.contextWindowMax) {
       const pct = Math.round((primary.contextWindowUsed / primary.contextWindowMax) * 100);

@@ -115,7 +115,7 @@ print(json.dumps(result))
     if (!active) {
       return {
         toolId: this.toolId, displayName: this.displayName,
-        isActive: false, lastUpdated: Date.now(),
+        isActive: false, lastUpdated: 0,
         activityCount: 0, activeTimeMs: 0,
         sessions: this.getSessions(), activeSessionId: this.activeSessionId,
       };
@@ -123,7 +123,7 @@ print(json.dumps(result))
     return {
       toolId: this.toolId, displayName: this.displayName,
       isActive: this.isExtensionActive() || active.messageCount > 0,
-      lastUpdated: Date.now(),
+      lastUpdated: active.lastActive || 0,
       model: active.model ? `${active.model} (${active.provider})` : undefined,
       inputTokens: active.inputTokens,
       outputTokens: active.outputTokens,

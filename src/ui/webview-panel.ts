@@ -378,12 +378,20 @@ function renderMetrics(m) {
           '<option value="'+s.id+'"'+(s.id===p.activeSessionId?' selected':'')+'>'+
           (s.title||s.id.slice(0,8))+' · '+timeAgo(s.lastActive)+'</option>'
         ).join('')+'</select>';
+    } else if (p.sessions && p.sessions.length === 1) {
+      sessionHtml = '<select class="session-select" disabled>'
+        +'<option>'+(p.sessions[0].title||p.sessions[0].id.slice(0,8))+' · '+timeAgo(p.sessions[0].lastActive)+'</option>'
+        +'</select>';
+    } else if (!p.sessions || p.sessions.length === 0) {
+      sessionHtml = '<select class="session-select" disabled>'
+        +'<option>暂无对话记录</option>'
+        +'</select>';
     }
     return '<div class="provider-card '+(active?'active':'inactive')+'">'
       +'<div class="provider-top">'
         +'<div class="provider-icon">'+getIcon(p.toolId)+'</div>'
         +'<div class="provider-info"><div class="provider-name">'+p.displayName+'</div>'
-          +(p.model?'<div class="provider-model">'+p.model+'</div>':'')
+          +'<div class="provider-model">'+(p.model||'暂无模型')+'</div>'
         +'</div>'
         +'<div class="provider-status '+(active?'on':'off')+'"></div>'
       +'</div>'
