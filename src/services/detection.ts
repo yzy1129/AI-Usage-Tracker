@@ -42,21 +42,39 @@ export class DetectionService implements vscode.Disposable {
 
   private scanUnknownAIExtensions() {
     const knownIds = new Set(KNOWN_AI_EXTENSIONS.flatMap(d => d.extensionIds));
-    const aiKeywords = ['ai', 'copilot', 'assistant', 'llm', 'gpt', 'chat', 'code-completion', 'autocomplete'];
+
+    const aiPatterns = [
+      /\bai\b/i, /\bllm\b/i, /\bgpt\b/i, /\bcopilot\b/i,
+      /\bchatbot\b/i, /\bcode\s*completion\b/i, /\bautocomplete\b/i,
+      /\bai\s*assist/i, /\bai\s*code/i, /\bcode\s*ai\b/i,
+      /\blanguage\s*model/i, /\bgenerat(?:ive|e)\s*ai/i,
+      /\bai[\s-]*powered/i, /\bml\s*code/i,
+    ];
+
+    const excludePatterns = [
+      /\bcsv\b/i, /\bpython\b/i, /\blint/i, /\bformat/i,
+      /\btheme\b/i, /\bicon\b/i, /\bgit\b/i, /\bdocker\b/i,
+      /\bsnippet/i, /\bdebug/i, /\btest/i, /\bsql\b/i,
+      /\bcontainer/i, /\bremote/i, /\bssh\b/i,
+    ];
 
     for (const ext of vscode.extensions.all) {
       if (knownIds.has(ext.id)) {continue;}
       const pkg = ext.packageJSON;
       if (!pkg) {continue;}
 
-      const name = (pkg.displayName || pkg.name || '').toLowerCase();
-      const desc = (pkg.description || '').toLowerCase();
+      const name = pkg.displayName || pkg.name || '';
+      const desc = pkg.description || '';
+      const text = `${name} ${desc}`;
       const cats: string[] = pkg.categories || [];
 
-      const isAI = aiKeywords.some(kw => name.includes(kw) || desc.includes(kw))
-        || cats.some((c: string) => c.toLowerCase().includes('machine learning') || c.toLowerCase().includes('ai'));
+      const isExcluded = excludePatterns.some(p => p.test(name));
+      if (isExcluded) {continue;}
 
-      if (isAI && ext.isActive) {
+      const hasAISignal = aiPatterns.some(p => p.test(text))
+        || cats.some((c: string) => /\bmachine learning\b/i.test(c) || /^ai$/i.test(c));
+
+      if (hasAISignal && ext.isActive) {
         const def: AIExtensionDef = {
           toolId: ext.id,
           extensionIds: [ext.id],
