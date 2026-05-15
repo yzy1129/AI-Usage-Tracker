@@ -22,6 +22,12 @@ function buildProgressBar(used: number, max: number, width: number = 10): string
   return '█'.repeat(filled) + '░'.repeat(empty);
 }
 
+function getVisibleProviders(metrics: AggregatedMetrics) {
+  return metrics.providers.filter(p =>
+    p.isActive || p.activityCount > 0 || (p.sessions && p.sessions.length > 0)
+  );
+}
+
 export class StatusBarUI implements vscode.Disposable {
   private item: vscode.StatusBarItem;
 
@@ -33,16 +39,25 @@ export class StatusBarUI implements vscode.Disposable {
   }
 
   update(metrics: AggregatedMetrics) {
-    if (metrics.activeProviderCount === 0) {
-      this.item.text = '$(hubot) AI: 无活跃会话';
-      this.item.tooltip = '未检测到活跃的 AI 工具';
+    const visibleProviders = getVisibleProviders(metrics);
+
+    if (visibleProviders.length === 0) {
+      this.item.text = '$(hubot) AI: 未读取到数据';
+      this.item.tooltip = '未检测到可读取的 AI 工具历史或活跃会话';
       return;
     }
 
     const primary = metrics.providers.find(p => p.toolId === metrics.primaryProvider);
     const parts: string[] = [];
 
-    parts.push(`$(hubot) ${primary?.model || primary?.displayName || 'AI'}`);
+    const activeModels = visibleProviders
+      .filter(p => p.isActive)
+      .map(p => `${p.displayName}:${p.model || '未知模型'}`);
+    const modelText = activeModels.length > 0
+      ? activeModels.join(', ')
+      : `${visibleProviders[0].displayName}:${visibleProviders[0].model || '未知模型'}`;
+
+    parts.push(`$(hubot) ${modelText}`);
 
     if (primary?.contextWindowUsed && primary?.contextWindowMax) {
       const pct = Math.round((primary.contextWindowUsed / primary.contextWindowMax) * 100);
@@ -56,19 +71,29 @@ export class StatusBarUI implements vscode.Disposable {
 
     parts.push(`对话:${metrics.totalActivityCount}`);
 
-    if (metrics.activeProviderCount > 1) {
+    if (metrics.activeProviderCount > 0) {
       parts.push(`${metrics.activeProviderCount}个AI活跃`);
     }
 
     this.item.text = parts.join(' | ');
 
     const tooltipLines: string[] = ['--- AI 使用追踪 ---'];
-    for (const p of metrics.providers) {
-      if (!p.isActive && p.activityCount === 0) {continue;}
+    for (const p of visibleProviders) {
       const status = p.isActive ? '🟢' : '⚪';
       let line = `${status} ${p.displayName}`;
-      if (p.model) { line += ` (${p.model})`; }
-      if (p.inputTokens) { line += ` | 输入:${formatTokens(p.inputTokens)} 输出:${formatTokens(p.outputTokens || 0)}`; }
+      line += ` | 模型:${p.model || '未读取'}`;
+      if (typeof p.contextWindowUsed === 'number' && p.contextWindowMax) {
+        const pct = Math.round((p.contextWindowUsed / p.contextWindowMax) * 100);
+        line += ` | 上下文:${formatTokens(p.contextWindowUsed)}/${formatTokens(p.contextWindowMax)} ${pct}%`;
+      } else {
+        line += ' | 上下文:未读取';
+      }
+      if (typeof p.inputTokens === 'number' || typeof p.outputTokens === 'number') {
+        line += ` | 输入:${formatTokens(p.inputTokens || 0)} 输出:${formatTokens(p.outputTokens || 0)}`;
+      } else {
+        line += ' | Token:未读取';
+      }
+      if (p.sessions && p.sessions.length > 0) { line += ` | 历史:${p.sessions.length}条`; }
       if (p.activeTimeMs > 0) { line += ` | 时长:${formatTime(p.activeTimeMs)}`; }
       tooltipLines.push(line);
     }

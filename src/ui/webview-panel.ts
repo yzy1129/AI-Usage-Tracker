@@ -310,6 +310,11 @@ function timeAgo(ts) {
   if (diff < 86400000) return Math.floor(diff/3600000)+'小时前';
   return Math.floor(diff/86400000)+'天前';
 }
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
+}
 
 function getIcon(toolId) {
   if (iconMap[toolId]) {
@@ -350,15 +355,17 @@ function renderMetrics(m) {
   document.getElementById('s-time').textContent = fmtTime(m.totalActiveTimeMs);
 
   const list = document.getElementById('providers-list');
-  const visible = m.providers.filter(p => p.isActive || p.activityCount > 0);
+  const visible = m.providers.filter(p =>
+    p.isActive || p.activityCount > 0 || (p.sessions && p.sessions.length > 0)
+  );
   if (visible.length === 0) {
-    list.innerHTML = '<div class="empty"><div class="empty-icon">😴</div>暂无活跃的 AI 工具</div>';
+    list.innerHTML = '<div class="empty"><div class="empty-icon">😴</div>暂无可读取的 AI 工具数据</div>';
     return;
   }
   list.innerHTML = visible.map(p => {
     const active = p.isActive;
     let ctxHtml = '';
-    if (p.contextWindowUsed && p.contextWindowMax) {
+    if (typeof p.contextWindowUsed === 'number' && p.contextWindowMax) {
       const pct = Math.min(100, Math.round(p.contextWindowUsed/p.contextWindowMax*100));
       const cls = pct>80?'danger':pct>60?'warn':'';
       ctxHtml = '<div class="ctx-container" style="margin-bottom:8px">'
@@ -366,31 +373,30 @@ function renderMetrics(m) {
         +'<div class="ctx-bar"><div class="ctx-fill'+( cls?' '+cls:'')+'" style="width:'+pct+'%"></div></div>'
         +'<div class="ctx-detail"><span>'+fmt(p.contextWindowUsed)+' 已用</span><span>'+fmt(p.contextWindowMax)+' 上限</span></div>'
         +'</div>';
-    }
-    let metricsHtml = '';
-    if (p.inputTokens || p.outputTokens) {
-      metricsHtml = '<div class="provider-metrics">'
-        +'<div class="metric-item"><span class="metric-label">输入</span><span class="metric-value">'+fmt(p.inputTokens)+'</span></div>'
-        +'<div class="metric-item"><span class="metric-label">输出</span><span class="metric-value">'+fmt(p.outputTokens)+'</span></div>'
-        +'<div class="metric-item"><span class="metric-label">缓存读</span><span class="metric-value">'+fmt(p.cacheReadTokens)+'</span></div>'
-        +'<div class="metric-item"><span class="metric-label">缓存写</span><span class="metric-value">'+fmt(p.cacheCreationTokens)+'</span></div>'
-        +'</div>';
     } else {
-      metricsHtml = '<div class="provider-metrics">'
-        +'<div class="metric-item"><span class="metric-label">交互</span><span class="metric-value">'+p.activityCount+'</span></div>'
-        +'<div class="metric-item"><span class="metric-label">时长</span><span class="metric-value">'+fmtTime(p.activeTimeMs)+'</span></div>'
+      ctxHtml = '<div class="provider-metrics" style="margin-bottom:8px">'
+        +'<div class="metric-item"><span class="metric-label">上下文</span><span class="metric-value">未读取</span></div>'
+        +'<div class="metric-item"><span class="metric-label">模型</span><span class="metric-value">'+esc(p.model || '未读取')+'</span></div>'
         +'</div>';
     }
+    const hasTokenFields = typeof p.inputTokens === 'number' || typeof p.outputTokens === 'number'
+      || typeof p.cacheReadTokens === 'number' || typeof p.cacheCreationTokens === 'number';
+    const metricsHtml = '<div class="provider-metrics">'
+      +'<div class="metric-item"><span class="metric-label">输入</span><span class="metric-value">'+(hasTokenFields ? fmt(p.inputTokens) : '未读取')+'</span></div>'
+      +'<div class="metric-item"><span class="metric-label">输出</span><span class="metric-value">'+(hasTokenFields ? fmt(p.outputTokens) : '未读取')+'</span></div>'
+      +'<div class="metric-item"><span class="metric-label">缓存读</span><span class="metric-value">'+(hasTokenFields ? fmt(p.cacheReadTokens) : '未读取')+'</span></div>'
+      +'<div class="metric-item"><span class="metric-label">交互</span><span class="metric-value">'+p.activityCount+'</span></div>'
+      +'</div>';
     let sessionHtml = '';
     if (p.sessions && p.sessions.length > 1) {
       sessionHtml = '<select class="session-select" data-tool="'+p.toolId+'" onchange="switchSession(this)">'
         + p.sessions.map(s =>
           '<option value="'+s.id+'"'+(s.id===p.activeSessionId?' selected':'')+'>'+
-          (s.title||s.id.slice(0,8))+' · '+timeAgo(s.lastActive)+'</option>'
+          esc(s.title||s.id.slice(0,8))+' · '+esc(s.model || p.model || '未知模型')+' · '+timeAgo(s.lastActive)+'</option>'
         ).join('')+'</select>';
     } else if (p.sessions && p.sessions.length === 1) {
       sessionHtml = '<select class="session-select" disabled>'
-        +'<option>'+(p.sessions[0].title||p.sessions[0].id.slice(0,8))+' · '+timeAgo(p.sessions[0].lastActive)+'</option>'
+        +'<option>'+esc(p.sessions[0].title||p.sessions[0].id.slice(0,8))+' · '+esc(p.sessions[0].model || p.model || '未知模型')+' · '+timeAgo(p.sessions[0].lastActive)+'</option>'
         +'</select>';
     } else if (!p.sessions || p.sessions.length === 0) {
       sessionHtml = '<select class="session-select" disabled>'
@@ -400,8 +406,8 @@ function renderMetrics(m) {
     return '<div class="provider-card '+(active?'active':'inactive')+'">'
       +'<div class="provider-top">'
         +'<div class="provider-icon">'+getIcon(p.toolId)+'</div>'
-        +'<div class="provider-info"><div class="provider-name">'+p.displayName+'</div>'
-          +'<div class="provider-model">'+(p.model||'暂无模型')+'</div>'
+        +'<div class="provider-info"><div class="provider-name">'+esc(p.displayName)+'</div>'
+          +'<div class="provider-model">'+esc(p.model||'暂无模型')+'</div>'
         +'</div>'
         +'<div class="provider-status '+(active?'on':'off')+'"></div>'
       +'</div>'

@@ -28,7 +28,7 @@ export class DetectionService implements vscode.Disposable {
   detectAndStart(): AIProvider[] {
     for (const def of KNOWN_AI_EXTENSIONS) {
       const isInstalled = def.extensionIds.some(id => !!vscode.extensions.getExtension(id));
-      const alwaysLoad = def.toolId === 'claude-code' || def.toolId === 'kilo-code';
+      const alwaysLoad = def.toolId === 'claude-code' || def.toolId === 'codex' || def.toolId === 'kilo-code';
 
       if (isInstalled || alwaysLoad) {
         const factory = SPECIALIZED_FACTORIES[def.toolId];

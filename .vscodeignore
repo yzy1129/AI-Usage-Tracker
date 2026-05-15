@@ -1,6 +1,9 @@
 .vscode/**
 .vscode-test/**
 node_modules/**
+src/**
+.git/**
+.github/**
 .gitignore
-CHANGELOG.md
+tsconfig.json
 *.vsix

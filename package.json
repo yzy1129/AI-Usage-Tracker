@@ -1,8 +1,8 @@
 {
   "name": "ai-usage-tracker",
   "displayName": "AI Usage Tracker",
-  "description": "Auto-detect and track usage metrics for all AI coding tools in VS Code",
-  "version": "0.3.0",
+  "description": "Track AI coding tool models, context windows, token usage, and conversation sessions in VS Code",
+  "version": "0.4.0",
   "publisher": "yzy1129",
   "author": {
     "name": "yzy"
@@ -26,7 +26,9 @@
     "kilo",
     "codex",
     "metrics",
-    "status-bar"
+    "status-bar",
+    "context-window",
+    "vscode-extension"
   ],
   "engines": {
     "vscode": "^1.85.0"
@@ -72,7 +74,9 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "check": "npm run compile",
+    "package": "npx @vscode/vsce package"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",

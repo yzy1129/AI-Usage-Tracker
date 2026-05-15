@@ -141,8 +141,6 @@ export class GitHubCopilotProvider extends AIProvider {
     } catch { /* ignore */ }
   }
 
-  // --- PLACEHOLDER_SCAN_LOAD_WATCH ---
-
   private scanSessions() {
     if (!this.chatSessionsDir || !fs.existsSync(this.chatSessionsDir)) { return; }
     try {

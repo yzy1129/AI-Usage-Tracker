@@ -1,42 +1,33 @@
 # AI Usage Tracker
 
-A VS Code extension that automatically detects and tracks usage metrics for all AI coding tools in your editor.
+AI Usage Tracker is a VS Code extension for monitoring AI coding tools from one place. It shows the active model, context-window usage, token usage, cache usage, session history, and recent activity for supported tools.
 
-一个 VS Code 扩展，自动检测并追踪编辑器中所有 AI 编程工具的使用指标。
+The extension reads local editor and tool history only. It does not upload prompts, responses, token metrics, or session metadata to any external service.
 
 ## Features
 
-- **Auto-detection** — Automatically scans and identifies all installed AI extensions
-- **Real-time metrics** — Token usage, context window, cache stats, session time
-- **Multi-session tracking** — Switch between conversations with per-session metrics
-- **Progress bar** — Visual context window usage in the status bar
-- **Side panel dashboard** — Detailed breakdown with 7-day usage trends
-- **Extension icons** — Displays actual extension icons from your installed tools
+- Automatic detection of popular AI coding extensions.
+- Per-tool dashboard cards for model, context window, input tokens, output tokens, cache reads, and conversation activity.
+- Codex history import from local `~/.codex/sessions/**/*.jsonl` files, including session dropdowns.
+- Claude Code and Kilo Code session tracking with token and model metadata where available.
+- Status bar summary for currently active AI tools and their models.
+- Side panel dashboard with session switching and seven-day activity trends.
+- Generic activity tracking for other active AI-like VS Code extensions.
 
-## Supported AI Tools
+## Supported Tools
 
-| Tool | Metrics Available |
-|------|-------------------|
-| Claude Code | Full tokens, model, cache, context window |
-| Kilo Code | Full tokens, model, cache |
-| GitHub Copilot | Activity count, usage time |
-| Codex | Activity count, usage time |
-| Cody | Activity count, usage time |
-| Tabnine | Activity count, usage time |
-| Codeium | Activity count, usage time |
-| Cursor | Activity count, usage time |
-| Amazon Q | Activity count, usage time |
-| Gemini | Activity count, usage time |
+| Tool | Model | Tokens | Context Window | Sessions | Data Source |
+| --- | --- | --- | --- | --- | --- |
+| Codex | Yes | Yes | Yes | Yes | `~/.codex/sessions` JSONL history |
+| Claude Code | Yes | Yes | Yes | Yes | `~/.claude/projects` JSONL history |
+| Kilo Code | Yes | Yes | Partial | Yes | Local Kilo SQLite database |
+| GitHub Copilot | Partial | No | No | Yes | VS Code chat session metadata |
+| Cody, Tabnine, Codeium, Cursor, Amazon Q, Gemini | Basic | No | No | No | Extension activation/activity signals |
+| Unknown AI extensions | Basic | No | No | No | Extension activation/activity signals |
 
-Any other AI extension is auto-detected and tracked with basic activity metrics.
+Some tools do not expose token or context-window data locally. In those cases the dashboard explicitly shows `未读取` instead of inventing metrics.
 
 ## Installation
-
-### From VSIX (Local)
-
-```bash
-code --install-extension ai-usage-tracker-0.3.0.vsix
-```
 
 ### From Source
 
@@ -47,67 +38,88 @@ npm install
 npm run compile
 ```
 
-Then press `F5` in VS Code to launch the Extension Development Host.
+Open the folder in VS Code and press `F5` to launch an Extension Development Host.
+
+### From VSIX
+
+```bash
+npm install
+npm run package
+code --install-extension ai-usage-tracker-0.4.0.vsix
+```
 
 ## Usage
 
-After installation and reload:
+After installing or reloading VS Code:
 
-1. **Status Bar** (bottom) — Shows model name, context progress bar, token counts, active AI tools
-2. **Side Panel** (Activity Bar icon) — Click the AI icon for the full dashboard
-3. **Session Switching** — Use the dropdown in each tool's card to switch between conversations
+1. Check the status bar for the active AI tool models and aggregate token totals.
+2. Open the `AI Usage` activity bar view for the full dashboard.
+3. Use each tool card's session dropdown to switch between detected conversation histories.
+4. Run `AI Tracker: Refresh Metrics` from the Command Palette if a newly created session is not visible yet.
 
-## Screenshots
+For Codex, the extension scans recent local history files under `~/.codex/sessions`, filters them to the current workspace when `cwd` metadata is present, and keeps watching active session files for updates.
 
-<!-- TODO: Add screenshots -->
+## Project Structure
+
+```text
+.
+├── .github/
+│   ├── ISSUE_TEMPLATE/
+│   └── PULL_REQUEST_TEMPLATE.md
+├── docs/
+│   ├── ARCHITECTURE.md
+│   └── PROVIDERS.md
+├── src/
+│   ├── extension.ts
+│   ├── constants.ts
+│   ├── types.ts
+│   ├── providers/
+│   │   ├── base.ts
+│   │   ├── claude-code.ts
+│   │   ├── codex.ts
+│   │   ├── generic.ts
+│   │   ├── github-copilot.ts
+│   │   └── kilo-code.ts
+│   ├── services/
+│   │   ├── aggregator.ts
+│   │   ├── detection.ts
+│   │   └── persistence.ts
+│   └── ui/
+│       ├── status-bar.ts
+│       └── webview-panel.ts
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── LICENSE
+├── SECURITY.md
+├── package.json
+└── tsconfig.json
+```
 
 ## Development
 
 ```bash
-# Install dependencies
 npm install
-
-# Compile
 npm run compile
-
-# Watch mode
 npm run watch
-
-# Package
-npx @vscode/vsce package --allow-missing-repository
 ```
 
-## Architecture
+Useful commands:
 
+```bash
+npm run check
+npm run package
 ```
-src/
-├── extension.ts          — Entry point, orchestrator
-├── types.ts              — TypeScript interfaces
-├── constants.ts          — AI extension registry, model limits
-├── providers/
-│   ├── base.ts           — Abstract AIProvider class
-│   ├── claude-code.ts    — Claude Code (JSONL file watcher)
-│   ├── kilo-code.ts      — Kilo Code (SQLite via Python)
-│   ├── github-copilot.ts — GitHub Copilot (activity detection)
-│   ├── codex.ts          — Codex (activity detection)
-│   └── generic.ts        — Generic provider for auto-detected tools
-├── services/
-│   ├── detection.ts      — Auto-detect installed AI extensions
-│   ├── aggregator.ts     — Combine metrics from all providers
-│   └── persistence.ts    — Historical data storage (30-day rolling)
-└── ui/
-    ├── status-bar.ts     — Compact status bar with progress bar
-    └── webview-panel.ts  — Side panel dashboard (WebviewView)
-```
+
+The extension entry point is `src/extension.ts`. Providers implement the `AIProvider` contract from `src/providers/base.ts`, and aggregated metrics flow through `src/services/aggregator.ts` into the status bar and dashboard webview.
+
+## Privacy
+
+AI Usage Tracker reads local files and VS Code extension metadata to compute usage metrics. The extension does not send collected data over the network. If a provider needs a local tool-specific data source, the path and behavior should be documented in `docs/PROVIDERS.md`.
 
 ## Contributing
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request.
 
 ## License
 
-[MIT](LICENSE)
+This project is licensed under the [MIT License](LICENSE).

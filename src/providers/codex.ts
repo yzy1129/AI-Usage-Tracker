@@ -5,6 +5,9 @@ import * as os from 'os';
 import { AIProvider } from './base';
 import { ProviderCapabilities, ProviderMetrics, SessionInfo } from '../types';
 
+const MAX_TRACKED_SESSION_FILES = 200;
+const ACTIVE_WINDOW_MS = 10 * 60 * 1000;
+
 interface CodexSessionData {
   id: string;
   file: string;
@@ -40,6 +43,7 @@ export class CodexProvider extends AIProvider {
   private fileOffsets: Map<string, number> = new Map();
   private partialLines: Map<string, string> = new Map();
   private dirWatchers: fs.FSWatcher[] = [];
+  private watchedDirs: Set<string> = new Set();
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
   private pollTimer: NodeJS.Timeout | undefined;
   private workspacePath = '';
@@ -64,7 +68,8 @@ export class CodexProvider extends AIProvider {
     this.pollTimer = setInterval(() => {
       this.loadSessionIndex();
       this.scanRecentSessions();
-    }, 30000);
+      this.watchSessionDirs();
+    }, 10000);
   }
 
   getSessions(): SessionInfo[] {
@@ -96,9 +101,11 @@ export class CodexProvider extends AIProvider {
         sessions: this.getSessions(), activeSessionId: this.activeSessionId,
       };
     }
+    const isRecentlyActive = Date.now() - active.lastActive < ACTIVE_WINDOW_MS;
     return {
       toolId: this.toolId, displayName: this.displayName,
-      isActive: true, lastUpdated: active.lastActive || 0,
+      isActive: this.isExtensionActive() || isRecentlyActive,
+      lastUpdated: active.lastActive || 0,
       model: active.model || undefined,
       inputTokens: active.totalInputTokens,
       outputTokens: active.totalOutputTokens,
@@ -121,11 +128,13 @@ export class CodexProvider extends AIProvider {
     this._onMetricsChanged.dispose();
   }
 
-  // --- PLACEHOLDER_PRIVATE_METHODS ---
+  private normalizeFsPath(fsPath: string): string {
+    return fsPath.replace(/\//g, '\\').replace(/\\+$/g, '').toLowerCase();
+  }
 
   private isCurrentWorkspace(cwd: string): boolean {
     if (!cwd || !this.workspacePath) { return true; }
-    return cwd.toLowerCase() === this.workspacePath;
+    return this.normalizeFsPath(cwd) === this.normalizeFsPath(this.workspacePath);
   }
 
   private getActiveSession(): CodexSessionData | undefined {
@@ -168,33 +177,72 @@ export class CodexProvider extends AIProvider {
     const sessionsDir = path.join(this.codexDir, 'sessions');
     if (!fs.existsSync(sessionsDir)) { return; }
 
-    const now = new Date();
-    const dirs = [
-      path.join(sessionsDir, String(now.getFullYear()),
-        String(now.getMonth() + 1).padStart(2, '0'),
-        String(now.getDate()).padStart(2, '0')),
-    ];
-    const yesterday = new Date(now.getTime() - 86400000);
-    dirs.push(path.join(sessionsDir, String(yesterday.getFullYear()),
-      String(yesterday.getMonth() + 1).padStart(2, '0'),
-      String(yesterday.getDate()).padStart(2, '0')));
+    const files = this.collectSessionFiles(sessionsDir);
+    let changed = false;
+    for (const item of files) {
+      const sessionId = this.extractSessionId(path.basename(item.file));
+      if (!sessionId) { continue; }
+      if (!this.sessions.has(sessionId)) {
+        this.loadSession(item.file, sessionId);
+        changed = true;
+      }
+      if (!this.fileWatchers.has(item.file)) {
+        this.watchFile(item.file, sessionId);
+      }
+    }
+    if (changed) {
+      this._onMetricsChanged.fire(this.getMetrics());
+    }
+  }
 
-    for (const dir of dirs) {
-      if (!fs.existsSync(dir)) { continue; }
-      try {
-        const files = fs.readdirSync(dir).filter(f => f.endsWith('.jsonl'));
-        for (const file of files) {
-          const fullPath = path.join(dir, file);
-          const sessionId = this.extractSessionId(file);
-          if (!sessionId) { continue; }
-          if (!this.sessions.has(sessionId)) {
-            this.loadSession(fullPath, sessionId);
-          }
-          if (!this.fileWatchers.has(fullPath)) {
-            this.watchFile(fullPath, sessionId);
+  private collectSessionFiles(sessionsDir: string): { file: string; mtimeMs: number }[] {
+    const collected: { file: string; mtimeMs: number }[] = [];
+    const years = this.safeReadDirs(sessionsDir).filter(d => /^\d{4}$/.test(d.name));
+
+    for (const year of years) {
+      const months = this.safeReadDirs(path.join(sessionsDir, year.name)).filter(d => /^\d{2}$/.test(d.name));
+      for (const month of months) {
+        const days = this.safeReadDirs(path.join(sessionsDir, year.name, month.name)).filter(d => /^\d{2}$/.test(d.name));
+        for (const day of days) {
+          const dayDir = path.join(sessionsDir, year.name, month.name, day.name);
+          for (const file of this.safeReadFiles(dayDir)) {
+            if (!file.name.endsWith('.jsonl')) { continue; }
+            collected.push({
+              file: path.join(dayDir, file.name),
+              mtimeMs: file.mtimeMs,
+            });
           }
         }
-      } catch { continue; }
+      }
+    }
+
+    return collected
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      .slice(0, MAX_TRACKED_SESSION_FILES);
+  }
+
+  private safeReadDirs(dir: string): fs.Dirent[] {
+    try {
+      return fs.readdirSync(dir, { withFileTypes: true }).filter(d => d.isDirectory());
+    } catch {
+      return [];
+    }
+  }
+
+  private safeReadFiles(dir: string): { name: string; mtimeMs: number }[] {
+    try {
+      return fs.readdirSync(dir, { withFileTypes: true })
+        .filter(d => d.isFile())
+        .map(d => {
+          const fullPath = path.join(dir, d.name);
+          let mtimeMs = 0;
+          try {
+            mtimeMs = fs.statSync(fullPath).mtimeMs;
+          } catch { /* ignore */ }
+          return { name: d.name, mtimeMs };
+        });
+    } catch {
+      return [];
     }
   }
 
@@ -202,8 +250,6 @@ export class CodexProvider extends AIProvider {
     const match = filename.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/);
     return match ? match[1] : undefined;
   }
-
-  // --- PLACEHOLDER_LOAD_AND_WATCH ---
 
   private loadSession(filePath: string, sessionId: string) {
     const data: CodexSessionData = {
@@ -233,6 +279,12 @@ export class CodexProvider extends AIProvider {
       this.partialLines.set(filePath, '');
     } catch { return; }
 
+    try {
+      const stat = fs.statSync(filePath);
+      if (!data.lastActive) { data.lastActive = stat.mtimeMs; }
+      if (!data.startTime) { data.startTime = stat.birthtimeMs || stat.mtimeMs; }
+    } catch { /* ignore */ }
+
     this.sessions.set(sessionId, data);
   }
 
@@ -257,6 +309,7 @@ export class CodexProvider extends AIProvider {
       }
     } else if (type === 'turn_context') {
       if (payload.model) { data.model = payload.model; }
+      if (payload.cwd) { data.cwd = payload.cwd; }
     } else if (type === 'response_item') {
       if (payload.role === 'user') {
         data.messageCount++;
@@ -276,12 +329,15 @@ export class CodexProvider extends AIProvider {
         data.totalInputTokens = usage.input_tokens || 0;
         data.totalOutputTokens = usage.output_tokens || 0;
         data.cachedInputTokens = usage.cached_input_tokens || 0;
-        data.contextWindowUsed = usage.input_tokens || 0;
+      }
+      const lastUsage = payload.info.last_token_usage;
+      if (lastUsage) {
+        data.contextWindowUsed = lastUsage.input_tokens || 0;
       }
       if (payload.info.model_context_window) {
         data.contextWindowMax = payload.info.model_context_window;
       }
-    } else if (type === 'event_msg' && payload.type === 'turn_started') {
+    } else if (type === 'event_msg' && (payload.type === 'task_started' || payload.type === 'turn_started')) {
       if (payload.model_context_window) {
         data.contextWindowMax = payload.model_context_window;
       }
@@ -348,28 +404,34 @@ export class CodexProvider extends AIProvider {
     if (!fs.existsSync(sessionsDir)) { return; }
 
     const now = new Date();
-    const todayDir = path.join(sessionsDir, String(now.getFullYear()),
-      String(now.getMonth() + 1).padStart(2, '0'),
-      String(now.getDate()).padStart(2, '0'));
+    for (let i = 0; i < 3; i++) {
+      const date = new Date(now.getTime() - i * 86400000);
+      const dayDir = path.join(sessionsDir, String(date.getFullYear()),
+        String(date.getMonth() + 1).padStart(2, '0'),
+        String(date.getDate()).padStart(2, '0'));
+      this.watchDayDirectory(dayDir);
+    }
+  }
 
-    if (fs.existsSync(todayDir)) {
-      try {
-        const watcher = fs.watch(todayDir, (eventType, filename) => {
-          if (filename && filename.endsWith('.jsonl') && eventType === 'rename') {
-            const fullPath = path.join(todayDir, filename);
-            if (fs.existsSync(fullPath)) {
-              const sessionId = this.extractSessionId(filename);
-              if (sessionId && !this.sessions.has(sessionId)) {
-                this.loadSession(fullPath, sessionId);
-                this.watchFile(fullPath, sessionId);
-                this.activeSessionId = sessionId;
-                this._onMetricsChanged.fire(this.getMetrics());
-              }
+  private watchDayDirectory(dayDir: string) {
+    if (!fs.existsSync(dayDir) || this.watchedDirs.has(dayDir)) { return; }
+    try {
+      const watcher = fs.watch(dayDir, (eventType, filename) => {
+        if (filename && filename.endsWith('.jsonl') && eventType === 'rename') {
+          const fullPath = path.join(dayDir, filename);
+          if (fs.existsSync(fullPath)) {
+            const sessionId = this.extractSessionId(filename);
+            if (sessionId && !this.sessions.has(sessionId)) {
+              this.loadSession(fullPath, sessionId);
+              this.watchFile(fullPath, sessionId);
+              this.activeSessionId = sessionId;
+              this._onMetricsChanged.fire(this.getMetrics());
             }
           }
-        });
-        this.dirWatchers.push(watcher);
-      } catch { /* ignore */ }
-    }
+        }
+      });
+      this.watchedDirs.add(dayDir);
+      this.dirWatchers.push(watcher);
+    } catch { /* ignore */ }
   }
 }

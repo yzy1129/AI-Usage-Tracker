@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0] - 2026-05-16
+
+### Added
+- Full Codex local history reader for `~/.codex/sessions/**/*.jsonl`
+- Codex model, token, cache, context-window, and session dropdown support
+- Open-source project documentation under `docs/`
+- GitHub issue and pull request templates
+- Contributing and security documentation
+
+### Changed
+- Codex provider now loads even when no Codex VS Code extension is installed
+- Dashboard cards now show per-tool model, token, and context status explicitly
+- Status bar tooltip now reports each readable AI tool separately
+- README updated for public open-source usage and provider documentation
+
 ## [0.3.0] - 2026-05-15
 
 ### Added
