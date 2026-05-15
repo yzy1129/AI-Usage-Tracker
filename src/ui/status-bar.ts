@@ -23,9 +23,7 @@ function buildProgressBar(used: number, max: number, width: number = 10): string
 }
 
 function getVisibleProviders(metrics: AggregatedMetrics) {
-  return metrics.providers.filter(p =>
-    p.isActive || p.activityCount > 0 || (p.sessions && p.sessions.length > 0)
-  );
+  return metrics.providers;
 }
 
 export class StatusBarUI implements vscode.Disposable {
@@ -55,11 +53,11 @@ export class StatusBarUI implements vscode.Disposable {
       .map(p => `${p.displayName}:${p.model || '未知模型'}`);
     const modelText = activeModels.length > 0
       ? activeModels.join(', ')
-      : `${visibleProviders[0].displayName}:${visibleProviders[0].model || '未知模型'}`;
+      : `${visibleProviders.length}个AI工具已检测`;
 
     parts.push(`$(hubot) ${modelText}`);
 
-    if (primary?.contextWindowUsed && primary?.contextWindowMax) {
+    if (typeof primary?.contextWindowUsed === 'number' && primary?.contextWindowMax) {
       const pct = Math.round((primary.contextWindowUsed / primary.contextWindowMax) * 100);
       const bar = buildProgressBar(primary.contextWindowUsed, primary.contextWindowMax);
       parts.push(`${bar} ${pct}%`);

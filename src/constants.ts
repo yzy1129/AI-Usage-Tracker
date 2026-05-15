@@ -9,7 +9,7 @@ export interface AIExtensionDef {
 }
 
 export const KNOWN_AI_EXTENSIONS: AIExtensionDef[] = [
-  { toolId: 'claude-code', extensionIds: ['anthropic.claude-code'], displayName: 'Claude Code', icon: '🤖', color: '#c4956a' },
+  { toolId: 'claude-code', extensionIds: ['anthropic.claude-code'], displayName: 'Claude Code for VS Code', icon: '🤖', color: '#c4956a' },
   { toolId: 'github-copilot', extensionIds: ['github.copilot', 'github.copilot-chat'], displayName: 'GitHub Copilot', icon: '✈️', color: '#6366f1' },
   { toolId: 'codex', extensionIds: ['openai.chatgpt', 'openai.codex'], displayName: 'Codex', icon: '🧠', color: '#10b981' },
   { toolId: 'kilo-code', extensionIds: ['kilocode.kilo-code'], displayName: 'Kilo Code', icon: '⚡', color: '#f59e0b' },

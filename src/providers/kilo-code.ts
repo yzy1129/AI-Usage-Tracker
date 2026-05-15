@@ -64,6 +64,8 @@ export class KiloCodeProvider extends AIProvider {
   }
 
   private readMetrics() {
+    if (!fs.existsSync(this.dbPath)) { return; }
+
     const script = `
 import sqlite3, json, sys
 db = sqlite3.connect(sys.argv[1])
@@ -78,9 +80,8 @@ c.execute("""
     (SELECT SUM(json_extract(m6.data,'$.tokens.cache.read')) FROM message m6 WHERE m6.session_id=s.id AND json_extract(m6.data,'$.role')='assistant') as cache_read,
     (SELECT SUM(json_extract(m7.data,'$.tokens.cache.write')) FROM message m7 WHERE m7.session_id=s.id AND json_extract(m7.data,'$.role')='assistant') as cache_write
   FROM session s
-  WHERE s.time_updated > (strftime('%s','now')-86400)*1000
   ORDER BY s.time_updated DESC
-  LIMIT 20
+  LIMIT 50
 """)
 rows = c.fetchall()
 db.close()
@@ -115,7 +116,7 @@ print(json.dumps(result))
     if (!active) {
       return {
         toolId: this.toolId, displayName: this.displayName,
-        isActive: false, lastUpdated: 0,
+        isActive: this.isExtensionActive(), lastUpdated: 0,
         activityCount: 0, activeTimeMs: 0,
         sessions: this.getSessions(), activeSessionId: this.activeSessionId,
       };

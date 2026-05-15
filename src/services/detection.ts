@@ -27,17 +27,10 @@ export class DetectionService implements vscode.Disposable {
 
   detectAndStart(): AIProvider[] {
     for (const def of KNOWN_AI_EXTENSIONS) {
-      const isInstalled = def.extensionIds.some(id => !!vscode.extensions.getExtension(id));
-      const alwaysLoad = def.toolId === 'claude-code' || def.toolId === 'codex' || def.toolId === 'kilo-code';
+      const installedExtensions = this.getInstalledExtensions(def.extensionIds);
 
-      if (isInstalled || alwaysLoad) {
-        const factory = SPECIALIZED_FACTORIES[def.toolId];
-        const provider = factory
-          ? factory(this.context, def)
-          : new GenericAIProvider(this.context, def);
-        provider.start();
-        this.providers.push(provider);
-        def.extensionIds.forEach(id => this.loadedExtensionIds.add(id));
+      if (installedExtensions.length > 0) {
+        this.addProvider(def, installedExtensions);
       }
     }
 
@@ -54,28 +47,26 @@ export class DetectionService implements vscode.Disposable {
 
   private checkForNewActivations() {
     for (const def of KNOWN_AI_EXTENSIONS) {
-      if (def.extensionIds.some(id => this.loadedExtensionIds.has(id))) {continue;}
+      if (def.extensionIds.some(id => this.loadedExtensionIds.has(this.normalizeExtensionId(id)))) {continue;}
 
-      const isInstalled = def.extensionIds.some(id => {
-        const ext = vscode.extensions.getExtension(id);
-        return ext?.isActive;
-      });
+      const installedExtensions = this.getInstalledExtensions(def.extensionIds);
 
-      if (isInstalled) {
-        const factory = SPECIALIZED_FACTORIES[def.toolId];
-        const provider = factory
-          ? factory(this.context, def)
-          : new GenericAIProvider(this.context, def);
-        provider.start();
-        this.providers.push(provider);
-        def.extensionIds.forEach(id => this.loadedExtensionIds.add(id));
+      if (installedExtensions.length > 0) {
+        this.addProvider(def, installedExtensions);
         this._onProvidersChanged.fire(this.providers);
       }
     }
+
+    if (this.scanUnknownAIExtensions()) {
+      this._onProvidersChanged.fire(this.providers);
+    }
   }
 
-  private scanUnknownAIExtensions() {
-    const knownIds = new Set(KNOWN_AI_EXTENSIONS.flatMap(d => d.extensionIds));
+  private scanUnknownAIExtensions(): boolean {
+    let changed = false;
+    const knownIds = new Set(KNOWN_AI_EXTENSIONS
+      .flatMap(d => d.extensionIds)
+      .map(id => this.normalizeExtensionId(id)));
 
     const aiPatterns = [
       /\bai\b/i, /\bllm\b/i, /\bgpt\b/i, /\bcopilot\b/i,
@@ -93,8 +84,10 @@ export class DetectionService implements vscode.Disposable {
     ];
 
     for (const ext of vscode.extensions.all) {
-      if (knownIds.has(ext.id)) {continue;}
-      if (this.loadedExtensionIds.has(ext.id)) {continue;}
+      const extId = this.normalizeExtensionId(ext.id);
+      if (this.isSelfExtension(extId)) {continue;}
+      if (knownIds.has(extId)) {continue;}
+      if (this.loadedExtensionIds.has(extId)) {continue;}
       const pkg = ext.packageJSON;
       if (!pkg) {continue;}
 
@@ -109,7 +102,7 @@ export class DetectionService implements vscode.Disposable {
       const hasAISignal = aiPatterns.some(p => p.test(text))
         || cats.some((c: string) => /\bmachine learning\b/i.test(c) || /^ai$/i.test(c));
 
-      if (hasAISignal && ext.isActive) {
+      if (hasAISignal) {
         const def: AIExtensionDef = {
           toolId: ext.id,
           extensionIds: [ext.id],
@@ -120,9 +113,12 @@ export class DetectionService implements vscode.Disposable {
         const provider = new GenericAIProvider(this.context, def);
         provider.start();
         this.providers.push(provider);
-        this.loadedExtensionIds.add(ext.id);
+        this.loadedExtensionIds.add(extId);
+        changed = true;
       }
     }
+
+    return changed;
   }
 
   getProviders(): AIProvider[] {
@@ -134,5 +130,31 @@ export class DetectionService implements vscode.Disposable {
     for (const p of this.providers) { p.dispose(); }
     this.providers = [];
     this._onProvidersChanged.dispose();
+  }
+
+  private normalizeExtensionId(id: string): string {
+    return id.toLowerCase();
+  }
+
+  private getInstalledExtensions(extensionIds: string[]): vscode.Extension<any>[] {
+    const wanted = new Set(extensionIds.map(id => this.normalizeExtensionId(id)));
+    return vscode.extensions.all.filter(ext => wanted.has(this.normalizeExtensionId(ext.id)));
+  }
+
+  private addProvider(def: AIExtensionDef, installedExtensions: vscode.Extension<any>[]) {
+    const factory = SPECIALIZED_FACTORIES[def.toolId];
+    const provider = factory
+      ? factory(this.context, def)
+      : new GenericAIProvider(this.context, def);
+    provider.start();
+    this.providers.push(provider);
+
+    def.extensionIds.forEach(id => this.loadedExtensionIds.add(this.normalizeExtensionId(id)));
+    installedExtensions.forEach(ext => this.loadedExtensionIds.add(this.normalizeExtensionId(ext.id)));
+  }
+
+  private isSelfExtension(extensionId: string): boolean {
+    const ownId = this.context.extension?.id;
+    return !!ownId && extensionId === this.normalizeExtensionId(ownId);
   }
 }

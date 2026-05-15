@@ -45,7 +45,7 @@ Open the folder in VS Code and press `F5` to launch an Extension Development Hos
 ```bash
 npm install
 npm run package
-code --install-extension ai-usage-tracker-0.4.0.vsix
+code --install-extension ai-usage-tracker-0.4.1.vsix
 ```
 
 ## Usage

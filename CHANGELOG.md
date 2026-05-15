@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1] - 2026-05-16
+
+### Fixed
+- Fixed case-sensitive VS Code extension ID matching, which could split one installed tool into duplicate cards
+- Fixed Claude Code for VS Code being shown separately from the Claude history provider
+- Fixed Codex detection so the installed `openai.chatgpt` extension uses the Codex local-history provider
+- Dashboard now shows every detected installed AI tool, even before readable token/history data exists
+
 ## [0.4.0] - 2026-05-16
 
 ### Added

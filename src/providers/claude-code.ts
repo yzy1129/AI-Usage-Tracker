@@ -30,7 +30,7 @@ interface SessionData {
 
 export class ClaudeCodeProvider extends AIProvider {
   readonly toolId = 'claude-code';
-  readonly displayName = 'Claude Code';
+  readonly displayName = 'Claude Code for VS Code';
   readonly extensionIds = ['anthropic.claude-code'];
   readonly capabilities: ProviderCapabilities = {
     hasTokenMetrics: true,
@@ -89,7 +89,7 @@ export class ClaudeCodeProvider extends AIProvider {
     if (!active) {
       return {
         toolId: this.toolId, displayName: this.displayName,
-        isActive: false, lastUpdated: 0,
+        isActive: this.isExtensionActive(), lastUpdated: 0,
         activityCount: 0, activeTimeMs: 0,
         sessions: this.getSessions(), activeSessionId: this.activeSessionId,
       };
@@ -141,17 +141,21 @@ export class ClaudeCodeProvider extends AIProvider {
       files = fs.readdirSync(this.sessionDir).filter(f => f.endsWith('.jsonl'));
     } catch { return; }
 
-    const now = Date.now();
-    const dayAgo = now - 24 * 60 * 60 * 1000;
+    const recentFiles = files
+      .map(file => {
+        const fullPath = path.join(this.sessionDir!, file);
+        let mtimeMs = 0;
+        try {
+          mtimeMs = fs.statSync(fullPath).mtimeMs;
+        } catch { /* ignore */ }
+        return { file: fullPath, mtimeMs };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+      .slice(0, 200);
 
-    for (const file of files) {
-      const fullPath = path.join(this.sessionDir, file);
-      try {
-        const stat = fs.statSync(fullPath);
-        if (stat.mtimeMs < dayAgo) {continue;}
-        this.loadSession(fullPath);
-        this.watchFile(fullPath);
-      } catch { continue; }
+    for (const item of recentFiles) {
+      this.loadSession(item.file);
+      this.watchFile(item.file);
     }
   }
 

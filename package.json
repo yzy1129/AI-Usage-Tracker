@@ -2,7 +2,7 @@
   "name": "ai-usage-tracker",
   "displayName": "AI Usage Tracker",
   "description": "Track AI coding tool models, context windows, token usage, and conversation sessions in VS Code",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "publisher": "yzy1129",
   "author": {
     "name": "yzy"

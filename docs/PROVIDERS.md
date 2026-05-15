@@ -24,7 +24,7 @@ Notes:
 
 - The provider scans recent session files and watches active day directories.
 - Sessions are filtered to the current workspace when `cwd` is available.
-- Codex is loaded even when the Codex VS Code extension id is not installed, because CLI/API sessions still produce local history files.
+- Codex is attached to the installed `openai.chatgpt` or `openai.codex` extension card and then enriched with local history data.
 
 ## Claude Code
 
@@ -41,6 +41,10 @@ Readable metrics:
 - Cache creation and cache read tokens
 - Session title and message count
 - Context-window estimate based on known model limits
+
+Notes:
+
+- The provider reads the latest local session files for the current workspace.
 
 ## Kilo Code
 
@@ -60,6 +64,7 @@ Readable metrics:
 Notes:
 
 - The provider reads SQLite data through the local Python runtime.
+- The provider lists the latest local Kilo sessions instead of only the current day.
 
 ## GitHub Copilot
 

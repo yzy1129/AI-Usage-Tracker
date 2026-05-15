@@ -73,7 +73,7 @@ export class DashboardPanel implements vscode.WebviewViewProvider {
 
     for (const def of KNOWN_AI_EXTENSIONS) {
       for (const extId of def.extensionIds) {
-        const ext = vscode.extensions.getExtension(extId);
+        const ext = this.findExtensionById(extId);
         if (ext && ext.packageJSON.icon) {
           const iconPath = path.join(ext.extensionPath, ext.packageJSON.icon);
           if (fs.existsSync(iconPath)) {
@@ -89,7 +89,7 @@ export class DashboardPanel implements vscode.WebviewViewProvider {
     for (const provider of this.detection.getProviders()) {
       if (icons[provider.toolId]) {continue;}
       for (const extId of provider.extensionIds) {
-        const ext = vscode.extensions.getExtension(extId);
+        const ext = this.findExtensionById(extId);
         if (ext && ext.packageJSON.icon) {
           const iconPath = path.join(ext.extensionPath, ext.packageJSON.icon);
           if (fs.existsSync(iconPath)) {
@@ -102,6 +102,11 @@ export class DashboardPanel implements vscode.WebviewViewProvider {
     }
 
     return icons;
+  }
+
+  private findExtensionById(extensionId: string): vscode.Extension<any> | undefined {
+    const target = extensionId.toLowerCase();
+    return vscode.extensions.all.find(ext => ext.id.toLowerCase() === target);
   }
 
   private getHtml(): string {
@@ -355,11 +360,9 @@ function renderMetrics(m) {
   document.getElementById('s-time').textContent = fmtTime(m.totalActiveTimeMs);
 
   const list = document.getElementById('providers-list');
-  const visible = m.providers.filter(p =>
-    p.isActive || p.activityCount > 0 || (p.sessions && p.sessions.length > 0)
-  );
+  const visible = m.providers;
   if (visible.length === 0) {
-    list.innerHTML = '<div class="empty"><div class="empty-icon">😴</div>暂无可读取的 AI 工具数据</div>';
+    list.innerHTML = '<div class="empty"><div class="empty-icon">😴</div>未检测到已安装的 AI 工具</div>';
     return;
   }
   list.innerHTML = visible.map(p => {
@@ -385,7 +388,9 @@ function renderMetrics(m) {
       +'<div class="metric-item"><span class="metric-label">输入</span><span class="metric-value">'+(hasTokenFields ? fmt(p.inputTokens) : '未读取')+'</span></div>'
       +'<div class="metric-item"><span class="metric-label">输出</span><span class="metric-value">'+(hasTokenFields ? fmt(p.outputTokens) : '未读取')+'</span></div>'
       +'<div class="metric-item"><span class="metric-label">缓存读</span><span class="metric-value">'+(hasTokenFields ? fmt(p.cacheReadTokens) : '未读取')+'</span></div>'
+      +'<div class="metric-item"><span class="metric-label">缓存写</span><span class="metric-value">'+(hasTokenFields ? fmt(p.cacheCreationTokens) : '未读取')+'</span></div>'
       +'<div class="metric-item"><span class="metric-label">交互</span><span class="metric-value">'+p.activityCount+'</span></div>'
+      +'<div class="metric-item"><span class="metric-label">时长</span><span class="metric-value">'+fmtTime(p.activeTimeMs)+'</span></div>'
       +'</div>';
     let sessionHtml = '';
     if (p.sessions && p.sessions.length > 1) {
