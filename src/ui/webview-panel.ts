@@ -357,6 +357,16 @@ function renderMetrics(m) {
   }
   list.innerHTML = visible.map(p => {
     const active = p.isActive;
+    let ctxHtml = '';
+    if (p.contextWindowUsed && p.contextWindowMax) {
+      const pct = Math.min(100, Math.round(p.contextWindowUsed/p.contextWindowMax*100));
+      const cls = pct>80?'danger':pct>60?'warn':'';
+      ctxHtml = '<div class="ctx-container" style="margin-bottom:8px">'
+        +'<div class="ctx-header"><span class="ctx-label">上下文</span><span class="ctx-pct">'+pct+'%</span></div>'
+        +'<div class="ctx-bar"><div class="ctx-fill'+( cls?' '+cls:'')+'" style="width:'+pct+'%"></div></div>'
+        +'<div class="ctx-detail"><span>'+fmt(p.contextWindowUsed)+' 已用</span><span>'+fmt(p.contextWindowMax)+' 上限</span></div>'
+        +'</div>';
+    }
     let metricsHtml = '';
     if (p.inputTokens || p.outputTokens) {
       metricsHtml = '<div class="provider-metrics">'
@@ -395,7 +405,7 @@ function renderMetrics(m) {
         +'</div>'
         +'<div class="provider-status '+(active?'on':'off')+'"></div>'
       +'</div>'
-      +metricsHtml+sessionHtml
+      +ctxHtml+metricsHtml+sessionHtml
     +'</div>';
   }).join('');
 }

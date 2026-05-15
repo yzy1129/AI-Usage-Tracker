@@ -1,6 +1,19 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { AIProvider } from './base';
-import { AIToolId, ProviderCapabilities, ProviderMetrics } from '../types';
+import { AIToolId, ProviderCapabilities, ProviderMetrics, SessionInfo } from '../types';
+
+interface CopilotSessionData {
+  id: string;
+  file: string;
+  title: string;
+  model: string;
+  maxInputTokens: number;
+  requestCount: number;
+  startTime: number;
+  lastActive: number;
+}
 
 export class GitHubCopilotProvider extends AIProvider {
   readonly toolId: AIToolId = 'github-copilot';
@@ -8,102 +21,234 @@ export class GitHubCopilotProvider extends AIProvider {
   readonly extensionIds = ['github.copilot', 'github.copilot-chat'];
   readonly capabilities: ProviderCapabilities = {
     hasTokenMetrics: false,
-    hasModelInfo: false,
+    hasModelInfo: true,
     hasContextWindow: false,
-    hasMultiSession: false,
+    hasMultiSession: true,
   };
 
-  private activityCount = 0;
-  private activeTimeMs = 0;
-  private sessionStartTime = 0;
-  private lastActivityTime = 0;
-  private wasActive = false;
+  private sessions: Map<string, CopilotSessionData> = new Map();
+  private activeSessionId = '';
+  private chatSessionsDir = '';
+  private dirWatcher: fs.FSWatcher | undefined;
+  private fileWatchers: Map<string, fs.FSWatcher> = new Map();
   private pollTimer: NodeJS.Timeout | undefined;
-  private disposables: vscode.Disposable[] = [];
 
   constructor(private context: vscode.ExtensionContext) {
     super();
   }
 
   start(): void {
-    if (!this.isExtensionInstalled()) {return;}
-    this.sessionStartTime = Date.now();
-    this.wasActive = this.isExtensionActive();
-
-    this.disposables.push(
-      vscode.workspace.onDidChangeTextDocument((e) => {
-        if (e.contentChanges.length > 0 && this.isExtensionActive()) {
-          this.recordActivity();
-        }
-      }),
-      vscode.window.onDidChangeActiveTextEditor(() => {
-        this.checkActivationChange();
-      }),
-      vscode.window.onDidChangeVisibleTextEditors(() => {
-        this.checkActivationChange();
-      }),
-    );
-
-    if (vscode.window.tabGroups) {
-      this.disposables.push(
-        vscode.window.tabGroups.onDidChangeTabs(() => {
-          this.checkActivationChange();
-        }),
-      );
+    if (!this.isExtensionInstalled()) { return; }
+    this.findChatSessionsDir();
+    if (this.chatSessionsDir) {
+      this.scanSessions();
+      this.watchDirectory();
     }
-
-    this.disposables.push(
-      vscode.window.onDidChangeWindowState((state) => {
-        if (state.focused) { this.checkActivationChange(); }
-      }),
-    );
 
     this.pollTimer = setInterval(() => {
-      if (this.isExtensionActive() && this.lastActivityTime > 0) {
-        const now = Date.now();
-        if (now - this.lastActivityTime < 60000) {
-          this.activeTimeMs += 10000;
-        }
+      if (this.chatSessionsDir) {
+        this.scanSessions();
       }
-      this._onMetricsChanged.fire(this.getMetrics());
-    }, 10000);
+    }, 15000);
   }
 
-  private recordActivity() {
-    const now = Date.now();
-    if (now - this.lastActivityTime > 2000) {
-      this.activityCount++;
-      this._onMetricsChanged.fire(this.getMetrics());
-    }
-    this.lastActivityTime = now;
+  getSessions(): SessionInfo[] {
+    return Array.from(this.sessions.values())
+      .sort((a, b) => b.lastActive - a.lastActive)
+      .map(s => ({
+        id: s.id,
+        title: s.title || s.id.slice(0, 8),
+        startTime: s.startTime,
+        lastActive: s.lastActive,
+        model: s.model,
+        isActive: s.id === this.activeSessionId,
+      }));
   }
 
-  private checkActivationChange() {
-    const isActive = this.isExtensionActive();
-    if (isActive && !this.wasActive) {
-      this.recordActivity();
-    }
-    if (isActive !== this.wasActive) {
-      this.wasActive = isActive;
-      this._onMetricsChanged.fire(this.getMetrics());
-    }
+  switchSession(sessionId: string): void {
+    this.activeSessionId = sessionId;
+    this._onMetricsChanged.fire(this.getMetrics());
   }
 
   getMetrics(): ProviderMetrics {
+    const active = this.getActiveSession();
+    if (!active) {
+      return {
+        toolId: this.toolId, displayName: this.displayName,
+        isActive: this.isExtensionActive(), lastUpdated: 0,
+        activityCount: 0, activeTimeMs: 0,
+        sessions: this.getSessions(), activeSessionId: this.activeSessionId,
+      };
+    }
     return {
-      toolId: this.toolId,
-      displayName: this.displayName,
-      isActive: this.isExtensionActive(),
-      lastUpdated: this.lastActivityTime || this.sessionStartTime || 0,
-      activityCount: this.activityCount,
-      sessionStartTime: this.sessionStartTime || undefined,
-      activeTimeMs: this.activeTimeMs,
+      toolId: this.toolId, displayName: this.displayName,
+      isActive: true, lastUpdated: active.lastActive || 0,
+      model: active.model || undefined,
+      activityCount: active.requestCount,
+      sessionStartTime: active.startTime || undefined,
+      activeTimeMs: active.startTime ? Date.now() - active.startTime : 0,
+      sessions: this.getSessions(),
+      activeSessionId: this.activeSessionId,
     };
   }
 
   dispose(): void {
     if (this.pollTimer) { clearInterval(this.pollTimer); }
-    this.disposables.forEach(d => d.dispose());
+    if (this.dirWatcher) { this.dirWatcher.close(); }
+    this.fileWatchers.forEach(w => w.close());
     this._onMetricsChanged.dispose();
+  }
+
+  private getActiveSession(): CopilotSessionData | undefined {
+    if (this.activeSessionId) {
+      const found = this.sessions.get(this.activeSessionId);
+      if (found) { return found; }
+    }
+    let latest: CopilotSessionData | undefined;
+    for (const [, s] of this.sessions) {
+      if (!latest || s.lastActive > latest.lastActive) { latest = s; }
+    }
+    if (latest) { this.activeSessionId = latest.id; }
+    return latest;
+  }
+
+  private findChatSessionsDir() {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders || workspaceFolders.length === 0) { return; }
+
+    const appData = process.env.APPDATA || '';
+    if (!appData) { return; }
+
+    const workspaceStorageDir = path.join(appData, 'Code', 'User', 'workspaceStorage');
+    if (!fs.existsSync(workspaceStorageDir)) { return; }
+
+    try {
+      const dirs = fs.readdirSync(workspaceStorageDir);
+      for (const dir of dirs) {
+        const chatDir = path.join(workspaceStorageDir, dir, 'chatSessions');
+        if (fs.existsSync(chatDir)) {
+          const workspaceJson = path.join(workspaceStorageDir, dir, 'workspace.json');
+          if (fs.existsSync(workspaceJson)) {
+            const content = fs.readFileSync(workspaceJson, 'utf8');
+            const wsPath = workspaceFolders[0].uri.fsPath;
+            if (content.includes(wsPath) || content.includes(wsPath.replace(/\\/g, '/'))) {
+              this.chatSessionsDir = chatDir;
+              return;
+            }
+          }
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  // --- PLACEHOLDER_SCAN_LOAD_WATCH ---
+
+  private scanSessions() {
+    if (!this.chatSessionsDir || !fs.existsSync(this.chatSessionsDir)) { return; }
+    try {
+      const files = fs.readdirSync(this.chatSessionsDir).filter(f => f.endsWith('.jsonl'));
+      let changed = false;
+      for (const file of files) {
+        const fullPath = path.join(this.chatSessionsDir, file);
+        const sessionId = path.basename(file, '.jsonl');
+        if (!this.sessions.has(sessionId)) {
+          this.loadSession(fullPath, sessionId);
+          changed = true;
+        }
+        if (!this.fileWatchers.has(fullPath)) {
+          this.watchFile(fullPath, sessionId);
+        }
+      }
+      if (changed) {
+        this._onMetricsChanged.fire(this.getMetrics());
+      }
+    } catch { /* ignore */ }
+  }
+
+  private loadSession(filePath: string, sessionId: string) {
+    try {
+      const content = fs.readFileSync(filePath, 'utf8');
+      const firstLine = content.split('\n')[0];
+      if (!firstLine) { return; }
+
+      const entry = JSON.parse(firstLine);
+      if (entry.kind !== 0) { return; }
+
+      const v = entry.v || {};
+      const data: CopilotSessionData = {
+        id: sessionId,
+        file: filePath,
+        title: '',
+        model: '',
+        maxInputTokens: 0,
+        requestCount: 0,
+        startTime: v.creationDate || 0,
+        lastActive: v.creationDate || 0,
+      };
+
+      const selectedModel = v.inputState?.selectedModel?.metadata;
+      if (selectedModel) {
+        data.model = selectedModel.id || selectedModel.name || '';
+        data.maxInputTokens = selectedModel.maxInputTokens || 0;
+      }
+
+      const requests = v.requests || [];
+      data.requestCount = requests.length;
+      if (requests.length > 0) {
+        const firstReq = requests[0];
+        if (firstReq?.message?.text) {
+          data.title = firstReq.message.text.slice(0, 40).replace(/\n/g, ' ');
+        }
+      }
+
+      const lines = content.split('\n');
+      for (let i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) { continue; }
+        try {
+          const lineEntry = JSON.parse(lines[i]);
+          if (lineEntry.kind === 1 && lineEntry.v) {
+            data.requestCount++;
+            data.lastActive = Math.max(data.lastActive, lineEntry.v.timestamp || data.lastActive);
+            if (!data.title && lineEntry.v.message?.text) {
+              data.title = lineEntry.v.message.text.slice(0, 40).replace(/\n/g, ' ');
+            }
+          }
+        } catch { continue; }
+      }
+
+      this.sessions.set(sessionId, data);
+    } catch { /* ignore */ }
+  }
+
+  private watchFile(filePath: string, sessionId: string) {
+    if (this.fileWatchers.has(filePath)) { return; }
+    try {
+      const watcher = fs.watch(filePath, () => {
+        setTimeout(() => {
+          this.loadSession(filePath, sessionId);
+          this.activeSessionId = sessionId;
+          this._onMetricsChanged.fire(this.getMetrics());
+        }, 300);
+      });
+      this.fileWatchers.set(filePath, watcher);
+    } catch { /* ignore */ }
+  }
+
+  private watchDirectory() {
+    if (!this.chatSessionsDir) { return; }
+    try {
+      this.dirWatcher = fs.watch(this.chatSessionsDir, (eventType, filename) => {
+        if (filename && filename.endsWith('.jsonl') && eventType === 'rename') {
+          const fullPath = path.join(this.chatSessionsDir, filename);
+          if (fs.existsSync(fullPath)) {
+            const sessionId = path.basename(filename, '.jsonl');
+            this.loadSession(fullPath, sessionId);
+            this.watchFile(fullPath, sessionId);
+            this.activeSessionId = sessionId;
+            this._onMetricsChanged.fire(this.getMetrics());
+          }
+        }
+      });
+    } catch { /* ignore */ }
   }
 }
