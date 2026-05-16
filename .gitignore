@@ -1,6 +1,47 @@
+# Dependencies
 node_modules/
+
+# Build output
 out/
-*.vsix
+dist/
+coverage/
+*.tsbuildinfo
+
+# VS Code extension test/runtime downloads
 .vscode-test/
+.vscode-test-web/
+
+# Local editor settings
 .vscode/
+
+# Package artifacts
+*.vsix
+*.tgz
+
+# Local npm/cache files
 .npm-cache/
+.cache/
+.eslintcache
+.nyc_output/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Temporary publish/upload working directories
+publish-worktree/
+upload-gitdir/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
