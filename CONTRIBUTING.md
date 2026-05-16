@@ -9,6 +9,7 @@ git clone https://github.com/yzy1129/AI-Usage-Tracker.git
 cd AI-Usage-Tracker
 npm install
 npm run compile
+npm run test
 ```
 
 Open the repository in VS Code and press `F5` to start the Extension Development Host.
@@ -46,6 +47,7 @@ Include the following in the PR description:
 - Keep provider-specific parsing inside the provider module.
 - Keep UI text concise and explicit when data is unavailable.
 - Do not commit `node_modules`, `out`, or packaged `.vsix` files.
+- On Windows, prefer the repository scripts because they already use symlink-safe Node entrypoints.
 
 ## Reporting Issues
 

@@ -39,6 +39,30 @@ export class DetectionService implements vscode.Disposable {
     return this.providers;
   }
 
+  async refreshProviders(): Promise<void> {
+    let providersChanged = false;
+
+    for (const def of KNOWN_AI_EXTENSIONS) {
+      if (def.extensionIds.some(id => this.loadedExtensionIds.has(this.normalizeExtensionId(id)))) { continue; }
+
+      const installedExtensions = this.getInstalledExtensions(def.extensionIds);
+      if (installedExtensions.length > 0) {
+        this.addProvider(def, installedExtensions);
+        providersChanged = true;
+      }
+    }
+
+    if (this.scanUnknownAIExtensions()) {
+      providersChanged = true;
+    }
+
+    if (providersChanged) {
+      this._onProvidersChanged.fire(this.providers);
+    }
+
+    await Promise.all(this.providers.map(provider => Promise.resolve(provider.refresh())));
+  }
+
   private startActivationWatcher() {
     this.activationCheckTimer = setInterval(() => {
       this.checkForNewActivations();

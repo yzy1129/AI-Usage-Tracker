@@ -5,6 +5,8 @@ import * as os from 'os';
 import { AIProvider } from './base';
 import { ProviderCapabilities, ProviderMetrics, SessionInfo } from '../types';
 import { getContextLimit } from '../constants';
+import { calculateObservedDuration, isRecentlyActive } from '../utils/provider-metrics';
+import { getWorkspacePaths } from '../utils/workspace';
 
 function encodeProjectPath(fsPath: string): string {
   let p = fsPath;
@@ -41,11 +43,13 @@ export class ClaudeCodeProvider extends AIProvider {
 
   private sessions: Map<string, SessionData> = new Map();
   private activeSessionId = '';
-  private sessionDir: string | undefined;
+  private sessionDirs: string[] = [];
   private fileWatchers: Map<string, fs.FSWatcher> = new Map();
   private fileOffsets: Map<string, number> = new Map();
+  private fileModifiedAt: Map<string, number> = new Map();
   private partialLines: Map<string, string> = new Map();
-  private dirWatcher: fs.FSWatcher | undefined;
+  private dirWatchers: fs.FSWatcher[] = [];
+  private watchedDirs: Set<string> = new Set();
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
 
   constructor(private context: vscode.ExtensionContext) {
@@ -53,17 +57,28 @@ export class ClaudeCodeProvider extends AIProvider {
   }
 
   start(): void {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {return;}
+    const workspacePaths = getWorkspacePaths();
+    if (workspacePaths.length === 0) { return; }
 
-    const workspacePath = workspaceFolders[0].uri.fsPath;
-    const encoded = encodeProjectPath(workspacePath);
-    const baseDir = path.join(os.homedir(), '.claude', 'projects', encoded);
+    this.sessionDirs = workspacePaths
+      .map((workspacePath) => path.join(os.homedir(), '.claude', 'projects', encodeProjectPath(workspacePath)))
+      .filter((sessionDir, index, dirs) => fs.existsSync(sessionDir) && dirs.indexOf(sessionDir) === index);
 
-    if (!fs.existsSync(baseDir)) {return;}
-    this.sessionDir = baseDir;
+    if (this.sessionDirs.length === 0) { return; }
     this.scanSessions();
     this.watchDirectory();
+  }
+
+  refresh(): void {
+    const workspacePaths = getWorkspacePaths();
+    this.sessionDirs = workspacePaths
+      .map((workspacePath) => path.join(os.homedir(), '.claude', 'projects', encodeProjectPath(workspacePath)))
+      .filter((sessionDir, index, dirs) => fs.existsSync(sessionDir) && dirs.indexOf(sessionDir) === index);
+
+    if (this.sessionDirs.length === 0) { return; }
+    this.scanSessions();
+    this.watchDirectory();
+    this._onMetricsChanged.fire(this.getMetrics());
   }
 
   getSessions(): SessionInfo[] {
@@ -95,9 +110,10 @@ export class ClaudeCodeProvider extends AIProvider {
       };
     }
     const contextMax = active.model ? getContextLimit(active.model) : 200000;
+    const activeNow = isRecentlyActive(active.lastActive);
     return {
       toolId: this.toolId, displayName: this.displayName,
-      isActive: true, lastUpdated: active.lastActive || Date.now(),
+      isActive: activeNow, lastUpdated: active.lastActive || Date.now(),
       model: active.model || undefined,
       inputTokens: active.totalInputTokens,
       outputTokens: active.totalOutputTokens,
@@ -107,7 +123,7 @@ export class ClaudeCodeProvider extends AIProvider {
       contextWindowMax: contextMax,
       activityCount: active.messageCount,
       sessionStartTime: active.startTime || undefined,
-      activeTimeMs: active.startTime ? Date.now() - active.startTime : 0,
+      activeTimeMs: calculateObservedDuration(active.startTime, active.lastActive, activeNow),
       sessions: this.getSessions(),
       activeSessionId: this.activeSessionId,
     };
@@ -116,7 +132,8 @@ export class ClaudeCodeProvider extends AIProvider {
   dispose(): void {
     this.fileWatchers.forEach(w => w.close());
     this.debounceTimers.forEach(t => clearTimeout(t));
-    if (this.dirWatcher) { this.dirWatcher.close(); }
+    this.dirWatchers.forEach(w => w.close());
+    this.watchedDirs.clear();
     this._onMetricsChanged.dispose();
   }
 
@@ -135,26 +152,33 @@ export class ClaudeCodeProvider extends AIProvider {
   }
 
   private scanSessions() {
-    if (!this.sessionDir) {return;}
-    let files: string[];
-    try {
-      files = fs.readdirSync(this.sessionDir).filter(f => f.endsWith('.jsonl'));
-    } catch { return; }
-
-    const recentFiles = files
-      .map(file => {
-        const fullPath = path.join(this.sessionDir!, file);
-        let mtimeMs = 0;
+    const recentFiles = this.sessionDirs
+      .flatMap((sessionDir) => {
+        let files: string[];
         try {
-          mtimeMs = fs.statSync(fullPath).mtimeMs;
-        } catch { /* ignore */ }
-        return { file: fullPath, mtimeMs };
+          files = fs.readdirSync(sessionDir).filter(f => f.endsWith('.jsonl'));
+        } catch {
+          return [];
+        }
+
+        return files.map(file => {
+          const fullPath = path.join(sessionDir, file);
+          let mtimeMs = 0;
+          try {
+            mtimeMs = fs.statSync(fullPath).mtimeMs;
+        } catch {
+          // Ignore transient file stat failures while scanning.
+        }
+          return { file: fullPath, mtimeMs };
+        });
       })
       .sort((a, b) => b.mtimeMs - a.mtimeMs)
       .slice(0, 200);
 
     for (const item of recentFiles) {
-      this.loadSession(item.file);
+      if (this.fileModifiedAt.get(item.file) !== item.mtimeMs) {
+        this.loadSession(item.file);
+      }
       this.watchFile(item.file);
     }
   }
@@ -180,6 +204,7 @@ export class ClaudeCodeProvider extends AIProvider {
       }
       this.fileOffsets.set(filePath, Buffer.byteLength(content, 'utf8'));
       this.partialLines.set(filePath, '');
+      this.fileModifiedAt.set(filePath, fs.statSync(filePath).mtimeMs);
     } catch { return; }
 
     this.sessions.set(id, data);
@@ -222,20 +247,26 @@ export class ClaudeCodeProvider extends AIProvider {
   }
 
   private watchDirectory() {
-    if (!this.sessionDir) {return;}
-    try {
-      this.dirWatcher = fs.watch(this.sessionDir, (eventType, filename) => {
-        if (filename && filename.endsWith('.jsonl') && eventType === 'rename') {
-          const fullPath = path.join(this.sessionDir!, filename);
-          if (fs.existsSync(fullPath) && !this.fileWatchers.has(fullPath)) {
-            this.loadSession(fullPath);
-            this.watchFile(fullPath);
-            this.activeSessionId = path.basename(fullPath, '.jsonl');
-            this._onMetricsChanged.fire(this.getMetrics());
+    for (const sessionDir of this.sessionDirs) {
+      if (this.watchedDirs.has(sessionDir)) { continue; }
+      try {
+        const watcher = fs.watch(sessionDir, (eventType, filename) => {
+          if (filename && filename.endsWith('.jsonl') && eventType === 'rename') {
+            const fullPath = path.join(sessionDir, filename);
+            if (fs.existsSync(fullPath) && !this.fileWatchers.has(fullPath)) {
+              this.loadSession(fullPath);
+              this.watchFile(fullPath);
+              this.activeSessionId = path.basename(fullPath, '.jsonl');
+              this._onMetricsChanged.fire(this.getMetrics());
+            }
           }
-        }
-      });
-    } catch {}
+        });
+        this.watchedDirs.add(sessionDir);
+        this.dirWatchers.push(watcher);
+      } catch {
+        // Ignore watcher registration failures for provider resilience.
+      }
+    }
   }
 
   private watchFile(filePath: string) {
@@ -249,7 +280,9 @@ export class ClaudeCodeProvider extends AIProvider {
         }, 200));
       });
       this.fileWatchers.set(filePath, watcher);
-    } catch {}
+    } catch {
+      // Ignore watcher registration failures for provider resilience.
+    }
   }
 
   private readNewContent(filePath: string) {
@@ -264,6 +297,7 @@ export class ClaudeCodeProvider extends AIProvider {
     stream.on('data', (chunk) => { data += chunk.toString(); });
     stream.on('end', () => {
       this.fileOffsets.set(filePath, stat.size);
+      this.fileModifiedAt.set(filePath, stat.mtimeMs);
       const id = path.basename(filePath, '.jsonl');
       const session = this.sessions.get(id);
       if (!session) {return;}

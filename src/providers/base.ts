@@ -19,6 +19,7 @@ export abstract class AIProvider implements vscode.Disposable {
   abstract getMetrics(): ProviderMetrics;
   abstract dispose(): void;
 
+  refresh(): Promise<void> | void {}
   getSessions(): SessionInfo[] { return []; }
   switchSession(_sessionId: string): void {}
 

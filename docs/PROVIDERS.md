@@ -23,7 +23,7 @@ Readable metrics:
 Notes:
 
 - The provider scans recent session files and watches active day directories.
-- Sessions are filtered to the current workspace when `cwd` is available.
+- Sessions are filtered to the current workspace when `cwd` is available, including multi-root workspaces.
 - Codex is attached to the installed `openai.chatgpt` or `openai.codex` extension card and then enriched with local history data.
 
 ## Claude Code
@@ -44,7 +44,7 @@ Readable metrics:
 
 Notes:
 
-- The provider reads the latest local session files for the current workspace.
+- The provider reads the latest local session files for the current workspace and supports multi-root workspaces.
 
 ## Kilo Code
 
@@ -52,6 +52,9 @@ Data source:
 
 ```text
 ~/.local/share/kilo/kilo.db
+~/Library/Application Support/kilo/kilo.db
+%APPDATA%/Kilo/kilo.db
+%LOCALAPPDATA%/Kilo/kilo.db
 ```
 
 Readable metrics:
@@ -63,7 +66,7 @@ Readable metrics:
 
 Notes:
 
-- The provider reads SQLite data through the local Python runtime.
+- The provider reads SQLite data through an available local Python runtime (`py -3`, `python3`, or `python` depending on platform).
 - The provider lists the latest local Kilo sessions instead of only the current day.
 
 ## GitHub Copilot
@@ -77,6 +80,7 @@ Data source:
 Readable metrics:
 
 - Selected model metadata when available
+- Selected model max input tokens when available
 - Chat request count
 - Session title and update time
 

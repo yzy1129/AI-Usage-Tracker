@@ -7,3 +7,5 @@ src/**
 .gitignore
 tsconfig.json
 *.vsix
+.npm-cache/**
+eslint.config.mjs

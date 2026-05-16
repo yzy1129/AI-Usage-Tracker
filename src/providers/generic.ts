@@ -59,6 +59,11 @@ export class GenericAIProvider extends AIProvider {
     }, 10000);
   }
 
+  refresh(): void {
+    this.checkActivationChange();
+    this._onMetricsChanged.fire(this.getMetrics());
+  }
+
   private checkActivationChange() {
     const isActive = this.isExtensionActive();
     if (isActive && !this.wasActive) {

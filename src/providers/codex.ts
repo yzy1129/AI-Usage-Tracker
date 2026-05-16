@@ -4,9 +4,10 @@ import * as path from 'path';
 import * as os from 'os';
 import { AIProvider } from './base';
 import { ProviderCapabilities, ProviderMetrics, SessionInfo } from '../types';
+import { calculateObservedDuration, isRecentlyActive } from '../utils/provider-metrics';
+import { getWorkspacePaths, isPathRelatedToWorkspaces } from '../utils/workspace';
 
 const MAX_TRACKED_SESSION_FILES = 200;
-const ACTIVE_WINDOW_MS = 10 * 60 * 1000;
 
 interface CodexSessionData {
   id: string;
@@ -41,12 +42,13 @@ export class CodexProvider extends AIProvider {
   private sessionIndex: Map<string, { title: string; updatedAt: number }> = new Map();
   private fileWatchers: Map<string, fs.FSWatcher> = new Map();
   private fileOffsets: Map<string, number> = new Map();
+  private fileModifiedAt: Map<string, number> = new Map();
   private partialLines: Map<string, string> = new Map();
   private dirWatchers: fs.FSWatcher[] = [];
   private watchedDirs: Set<string> = new Set();
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
   private pollTimer: NodeJS.Timeout | undefined;
-  private workspacePath = '';
+  private workspacePaths: string[] = [];
 
   constructor(private context: vscode.ExtensionContext) {
     super();
@@ -54,10 +56,7 @@ export class CodexProvider extends AIProvider {
   }
 
   start(): void {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (workspaceFolders && workspaceFolders.length > 0) {
-      this.workspacePath = workspaceFolders[0].uri.fsPath.toLowerCase();
-    }
+    this.workspacePaths = getWorkspacePaths();
 
     if (!fs.existsSync(this.codexDir)) { return; }
 
@@ -70,6 +69,15 @@ export class CodexProvider extends AIProvider {
       this.scanRecentSessions();
       this.watchSessionDirs();
     }, 10000);
+  }
+
+  refresh(): void {
+    if (!fs.existsSync(this.codexDir)) { return; }
+    this.workspacePaths = getWorkspacePaths();
+    this.loadSessionIndex();
+    this.scanRecentSessions(true);
+    this.watchSessionDirs();
+    this._onMetricsChanged.fire(this.getMetrics());
   }
 
   getSessions(): SessionInfo[] {
@@ -101,10 +109,10 @@ export class CodexProvider extends AIProvider {
         sessions: this.getSessions(), activeSessionId: this.activeSessionId,
       };
     }
-    const isRecentlyActive = Date.now() - active.lastActive < ACTIVE_WINDOW_MS;
+    const activeNow = isRecentlyActive(active.lastActive);
     return {
       toolId: this.toolId, displayName: this.displayName,
-      isActive: this.isExtensionActive() || isRecentlyActive,
+      isActive: activeNow,
       lastUpdated: active.lastActive || 0,
       model: active.model || undefined,
       inputTokens: active.totalInputTokens,
@@ -114,7 +122,7 @@ export class CodexProvider extends AIProvider {
       contextWindowMax: active.contextWindowMax || 258400,
       activityCount: active.messageCount,
       sessionStartTime: active.startTime || undefined,
-      activeTimeMs: active.startTime ? Date.now() - active.startTime : 0,
+      activeTimeMs: calculateObservedDuration(active.startTime, active.lastActive, activeNow),
       sessions: this.getSessions(),
       activeSessionId: this.activeSessionId,
     };
@@ -128,13 +136,8 @@ export class CodexProvider extends AIProvider {
     this._onMetricsChanged.dispose();
   }
 
-  private normalizeFsPath(fsPath: string): string {
-    return fsPath.replace(/\//g, '\\').replace(/\\+$/g, '').toLowerCase();
-  }
-
   private isCurrentWorkspace(cwd: string): boolean {
-    if (!cwd || !this.workspacePath) { return true; }
-    return this.normalizeFsPath(cwd) === this.normalizeFsPath(this.workspacePath);
+    return isPathRelatedToWorkspaces(cwd, this.workspacePaths);
   }
 
   private getActiveSession(): CodexSessionData | undefined {
@@ -156,6 +159,7 @@ export class CodexProvider extends AIProvider {
   private loadSessionIndex() {
     const indexPath = path.join(this.codexDir, 'session_index.jsonl');
     if (!fs.existsSync(indexPath)) { return; }
+    this.sessionIndex.clear();
     try {
       const content = fs.readFileSync(indexPath, 'utf8');
       for (const line of content.split('\n')) {
@@ -173,7 +177,7 @@ export class CodexProvider extends AIProvider {
     } catch { /* ignore */ }
   }
 
-  private scanRecentSessions() {
+  private scanRecentSessions(forceReload: boolean = false) {
     const sessionsDir = path.join(this.codexDir, 'sessions');
     if (!fs.existsSync(sessionsDir)) { return; }
 
@@ -182,7 +186,10 @@ export class CodexProvider extends AIProvider {
     for (const item of files) {
       const sessionId = this.extractSessionId(path.basename(item.file));
       if (!sessionId) { continue; }
-      if (!this.sessions.has(sessionId)) {
+      const shouldReload = forceReload
+        || !this.sessions.has(sessionId)
+        || this.fileModifiedAt.get(item.file) !== item.mtimeMs;
+      if (shouldReload) {
         this.loadSession(item.file, sessionId);
         changed = true;
       }
@@ -281,6 +288,7 @@ export class CodexProvider extends AIProvider {
 
     try {
       const stat = fs.statSync(filePath);
+      this.fileModifiedAt.set(filePath, stat.mtimeMs);
       if (!data.lastActive) { data.lastActive = stat.mtimeMs; }
       if (!data.startTime) { data.startTime = stat.birthtimeMs || stat.mtimeMs; }
     } catch { /* ignore */ }
@@ -370,6 +378,7 @@ export class CodexProvider extends AIProvider {
     stream.on('data', (chunk) => { rawData += chunk.toString(); });
     stream.on('end', () => {
       this.fileOffsets.set(filePath, stat.size);
+      this.fileModifiedAt.set(filePath, stat.mtimeMs);
       let session = this.sessions.get(sessionId);
       if (!session) {
         session = {

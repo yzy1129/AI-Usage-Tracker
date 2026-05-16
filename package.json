@@ -2,7 +2,7 @@
   "name": "ai-usage-tracker",
   "displayName": "AI Usage Tracker",
   "description": "Track AI coding tool models, context windows, token usage, and conversation sessions in VS Code",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "publisher": "yzy1129",
   "author": {
     "name": "yzy"
@@ -73,14 +73,22 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
-    "check": "npm run compile",
-    "package": "npx @vscode/vsce package"
+    "compile": "node --preserve-symlinks --preserve-symlinks-main ./node_modules/typescript/bin/tsc -p ./",
+    "watch": "node --preserve-symlinks --preserve-symlinks-main ./node_modules/typescript/bin/tsc -watch -p ./",
+    "lint": "node --preserve-symlinks --preserve-symlinks-main ./node_modules/eslint/bin/eslint.js src --ext .ts",
+    "test:compile": "node --preserve-symlinks --preserve-symlinks-main ./node_modules/typescript/bin/tsc -p ./",
+    "test": "node --preserve-symlinks --preserve-symlinks-main --test ./out/test/**/*.test.js",
+    "check": "npm run lint && npm run compile && npm run test",
+    "package": "npx --cache .npm-cache @vscode/vsce package"
   },
   "devDependencies": {
+    "@eslint/js": "^9.27.0",
+    "@vscode/vsce": "^3.6.2",
     "@types/vscode": "^1.85.0",
     "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.33.1",
+    "@typescript-eslint/parser": "^8.33.1",
+    "eslint": "^9.27.0",
     "typescript": "^5.3.0"
   }
 }

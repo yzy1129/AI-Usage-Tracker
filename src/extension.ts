@@ -31,13 +31,24 @@ export function activate(context: vscode.ExtensionContext) {
 
   const initial = aggregator.getAggregated();
   statusBar.update(initial);
+  dashboard.update(initial);
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(DashboardPanel.viewType, dashboard),
     vscode.commands.registerCommand('aiTracker.showDashboard', () => {
       vscode.commands.executeCommand('aiTracker.dashboard.focus');
     }),
-    vscode.commands.registerCommand('aiTracker.refresh', () => {
+    vscode.commands.registerCommand('aiTracker.refresh', async () => {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: 'AI Tracker 正在刷新指标',
+        },
+        async () => {
+          await detection.refreshProviders();
+        },
+      );
+
       const metrics = aggregator.getAggregated();
       statusBar.update(metrics);
       dashboard.update(metrics);
@@ -52,6 +63,7 @@ export function activate(context: vscode.ExtensionContext) {
     aggregator,
     persistence,
     statusBar,
+    dashboard,
   );
 }
 

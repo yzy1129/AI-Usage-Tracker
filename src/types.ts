@@ -74,7 +74,7 @@ export interface DailySummary {
 }
 
 export interface HistoryStore {
-  version: 1;
+  version: number;
   snapshots: MetricsSnapshot[];
   dailySummaries: DailySummary[];
 }

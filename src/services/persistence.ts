@@ -2,12 +2,15 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { AggregatedMetrics, HistoryStore, MetricsSnapshot, DailySummary } from '../types';
+import { rebuildDailySummaries } from '../utils/history';
 
 export class PersistenceService implements vscode.Disposable {
   private storagePath: string;
   private history: HistoryStore;
   private snapshotTimer: NodeJS.Timeout | undefined;
   private saveDebounce: NodeJS.Timeout | undefined;
+  private _onHistoryChanged = new vscode.EventEmitter<DailySummary[]>();
+  readonly onHistoryChanged = this._onHistoryChanged.event;
 
   constructor(private context: vscode.ExtensionContext) {
     const dir = context.globalStorageUri.fsPath;
@@ -19,6 +22,7 @@ export class PersistenceService implements vscode.Disposable {
   }
 
   startRecording(getMetrics: () => AggregatedMetrics) {
+    this.recordSnapshot(getMetrics());
     this.snapshotTimer = setInterval(() => {
       this.recordSnapshot(getMetrics());
     }, 5 * 60 * 1000);
@@ -41,9 +45,10 @@ export class PersistenceService implements vscode.Disposable {
     };
 
     this.history.snapshots.push(snapshot);
-    this.updateDailySummary(snapshot);
     this.prune();
+    this.history.dailySummaries = rebuildDailySummaries(this.history.snapshots);
     this.debouncedSave();
+    this._onHistoryChanged.fire(this.getDailySummaries(7));
   }
 
   getHistory(days: number): MetricsSnapshot[] {
@@ -55,41 +60,27 @@ export class PersistenceService implements vscode.Disposable {
     return this.history.dailySummaries.slice(-days);
   }
 
-  private updateDailySummary(snapshot: MetricsSnapshot) {
-    let summary = this.history.dailySummaries.find(s => s.date === snapshot.date);
-    if (!summary) {
-      summary = { date: snapshot.date, providers: [] };
-      this.history.dailySummaries.push(summary);
-    }
-
-    for (const sp of snapshot.providers) {
-      let provEntry = summary.providers.find(p => p.toolId === sp.toolId);
-      if (!provEntry) {
-        provEntry = { toolId: sp.toolId, totalInputTokens: 0, totalOutputTokens: 0, totalActivityCount: 0, totalActiveTimeMs: 0 };
-        summary.providers.push(provEntry);
-      }
-      provEntry.totalInputTokens = sp.inputTokens;
-      provEntry.totalOutputTokens = sp.outputTokens;
-      provEntry.totalActivityCount = sp.activityCount;
-      provEntry.totalActiveTimeMs = sp.activeTimeMs;
-    }
-  }
-
   private prune() {
     const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
     this.history.snapshots = this.history.snapshots.filter(s => s.timestamp >= cutoff);
-    const dateCutoff = new Date(cutoff).toISOString().slice(0, 10);
-    this.history.dailySummaries = this.history.dailySummaries.filter(s => s.date >= dateCutoff);
   }
 
   private load(): HistoryStore {
     try {
       if (fs.existsSync(this.storagePath)) {
         const data = fs.readFileSync(this.storagePath, 'utf8');
-        return JSON.parse(data);
+        const parsed = JSON.parse(data) as Partial<HistoryStore>;
+        const snapshots = Array.isArray(parsed.snapshots) ? parsed.snapshots : [];
+        return {
+          version: 2,
+          snapshots,
+          dailySummaries: rebuildDailySummaries(snapshots),
+        };
       }
-    } catch {}
-    return { version: 1, snapshots: [], dailySummaries: [] };
+    } catch {
+      // Ignore malformed or unavailable persisted history and start fresh.
+    }
+    return { version: 2, snapshots: [], dailySummaries: [] };
   }
 
   private debouncedSave() {
@@ -100,12 +91,15 @@ export class PersistenceService implements vscode.Disposable {
   private save() {
     try {
       fs.writeFileSync(this.storagePath, JSON.stringify(this.history), 'utf8');
-    } catch {}
+    } catch {
+      // Ignore transient storage write failures; a later save will retry.
+    }
   }
 
   dispose(): void {
     if (this.snapshotTimer) { clearInterval(this.snapshotTimer); }
     if (this.saveDebounce) { clearTimeout(this.saveDebounce); }
     this.save();
+    this._onHistoryChanged.dispose();
   }
 }

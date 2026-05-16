@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import { execFile } from 'child_process';
 import { AIProvider } from './base';
 import { ProviderCapabilities, ProviderMetrics, SessionInfo } from '../types';
+import { calculateObservedDuration, isRecentlyActive } from '../utils/provider-metrics';
 
 interface KiloSession {
   id: string;
@@ -18,6 +19,11 @@ interface KiloSession {
   messageCount: number;
   startTime: number;
   lastActive: number;
+}
+
+interface PythonCommand {
+  command: string;
+  args: string[];
 }
 
 export class KiloCodeProvider extends AIProvider {
@@ -34,17 +40,23 @@ export class KiloCodeProvider extends AIProvider {
   private sessions: KiloSession[] = [];
   private activeSessionId = '';
   private pollTimer: NodeJS.Timeout | undefined;
-  private dbPath: string;
+  private dbPath: string | undefined;
+  private workingPython: PythonCommand | undefined;
 
   constructor(private context: vscode.ExtensionContext) {
     super();
-    this.dbPath = path.join(os.homedir(), '.local', 'share', 'kilo', 'kilo.db');
   }
 
   start(): void {
-    if (!fs.existsSync(this.dbPath) && !this.isExtensionInstalled()) {return;}
+    this.dbPath = this.resolveDbPath();
+    if (!this.dbPath && !this.isExtensionInstalled()) { return; }
     this.readMetrics();
     this.pollTimer = setInterval(() => this.readMetrics(), 5000);
+  }
+
+  refresh(): void {
+    this.dbPath = this.resolveDbPath();
+    this.readMetrics();
   }
 
   getSessions(): SessionInfo[] {
@@ -63,8 +75,85 @@ export class KiloCodeProvider extends AIProvider {
     this._onMetricsChanged.fire(this.getMetrics());
   }
 
+  getMetrics(): ProviderMetrics {
+    const active = this.sessions.find(s => s.id === this.activeSessionId) || this.sessions[0];
+    if (!active) {
+      return {
+        toolId: this.toolId, displayName: this.displayName,
+        isActive: false, lastUpdated: 0,
+        activityCount: 0, activeTimeMs: 0,
+        sessions: this.getSessions(), activeSessionId: this.activeSessionId,
+      };
+    }
+
+    const activeNow = isRecentlyActive(active.lastActive);
+    return {
+      toolId: this.toolId, displayName: this.displayName,
+      isActive: activeNow,
+      lastUpdated: active.lastActive || 0,
+      model: active.model ? `${active.model} (${active.provider})` : undefined,
+      inputTokens: active.inputTokens,
+      outputTokens: active.outputTokens,
+      cacheCreationTokens: active.cacheWrite,
+      cacheReadTokens: active.cacheRead,
+      activityCount: active.messageCount,
+      sessionStartTime: active.startTime || undefined,
+      activeTimeMs: calculateObservedDuration(active.startTime, active.lastActive, activeNow),
+      sessions: this.getSessions(),
+      activeSessionId: this.activeSessionId,
+    };
+  }
+
+  dispose(): void {
+    if (this.pollTimer) { clearInterval(this.pollTimer); }
+    this._onMetricsChanged.dispose();
+  }
+
+  private resolveDbPath(): string | undefined {
+    return this.getCandidateDbPaths().find(candidate => fs.existsSync(candidate));
+  }
+
+  private getCandidateDbPaths(): string[] {
+    const home = os.homedir();
+    const candidates = [
+      path.join(home, '.local', 'share', 'kilo', 'kilo.db'),
+      path.join(home, 'Library', 'Application Support', 'kilo', 'kilo.db'),
+    ];
+
+    const appData = process.env.APPDATA;
+    const localAppData = process.env.LOCALAPPDATA;
+    if (appData) {
+      candidates.push(path.join(appData, 'Kilo', 'kilo.db'));
+      candidates.push(path.join(appData, 'kilo', 'kilo.db'));
+    }
+    if (localAppData) {
+      candidates.push(path.join(localAppData, 'Kilo', 'kilo.db'));
+      candidates.push(path.join(localAppData, 'kilo', 'kilo.db'));
+    }
+
+    return candidates.filter((candidate, index) => candidates.indexOf(candidate) === index);
+  }
+
+  private getPythonCommands(): PythonCommand[] {
+    if (this.workingPython) {
+      return [this.workingPython];
+    }
+
+    if (process.platform === 'win32') {
+      return [
+        { command: 'py', args: ['-3'] },
+        { command: 'python', args: [] },
+      ];
+    }
+
+    return [
+      { command: 'python3', args: [] },
+      { command: 'python', args: [] },
+    ];
+  }
+
   private readMetrics() {
-    if (!fs.existsSync(this.dbPath)) { return; }
+    if (!this.dbPath || !fs.existsSync(this.dbPath)) { return; }
 
     const script = `
 import sqlite3, json, sys
@@ -93,53 +182,49 @@ for r in rows:
 print(json.dumps(result))
 `;
 
-    execFile('python', ['-c', script, this.dbPath], { timeout: 8000 }, (err, stdout) => {
-      if (err || !stdout.trim()) {return;}
-      try {
-        const rows = JSON.parse(stdout.trim());
-        this.sessions = rows.map((r: any) => ({
-          id: r.id, title: r.title, model: r.model, provider: r.provider,
-          inputTokens: r.input, outputTokens: r.output,
-          cacheRead: r.cache_read, cacheWrite: r.cache_write,
-          messageCount: r.count, startTime: r.start, lastActive: r.last,
-        }));
-        if (!this.activeSessionId && this.sessions.length > 0) {
-          this.activeSessionId = this.sessions[0].id;
-        }
-        this._onMetricsChanged.fire(this.getMetrics());
-      } catch {}
-    });
-  }
+    const commands = this.getPythonCommands();
+    const dbPath = this.dbPath;
+    const tryExec = (index: number) => {
+      if (index >= commands.length) { return; }
+      const pythonCommand = commands[index];
 
-  getMetrics(): ProviderMetrics {
-    const active = this.sessions.find(s => s.id === this.activeSessionId) || this.sessions[0];
-    if (!active) {
-      return {
-        toolId: this.toolId, displayName: this.displayName,
-        isActive: this.isExtensionActive(), lastUpdated: 0,
-        activityCount: 0, activeTimeMs: 0,
-        sessions: this.getSessions(), activeSessionId: this.activeSessionId,
-      };
-    }
-    return {
-      toolId: this.toolId, displayName: this.displayName,
-      isActive: this.isExtensionActive() || active.messageCount > 0,
-      lastUpdated: active.lastActive || 0,
-      model: active.model ? `${active.model} (${active.provider})` : undefined,
-      inputTokens: active.inputTokens,
-      outputTokens: active.outputTokens,
-      cacheCreationTokens: active.cacheWrite,
-      cacheReadTokens: active.cacheRead,
-      activityCount: active.messageCount,
-      sessionStartTime: active.startTime || undefined,
-      activeTimeMs: active.lastActive && active.startTime ? active.lastActive - active.startTime : 0,
-      sessions: this.getSessions(),
-      activeSessionId: this.activeSessionId,
+      execFile(
+        pythonCommand.command,
+        [...pythonCommand.args, '-c', script, dbPath],
+        { timeout: 8000 },
+        (err, stdout) => {
+          if (err || !stdout.trim()) {
+            tryExec(index + 1);
+            return;
+          }
+
+          try {
+            const rows = JSON.parse(stdout.trim());
+            this.workingPython = pythonCommand;
+            this.sessions = rows.map((r: any) => ({
+              id: r.id,
+              title: r.title,
+              model: r.model,
+              provider: r.provider,
+              inputTokens: r.input,
+              outputTokens: r.output,
+              cacheRead: r.cache_read,
+              cacheWrite: r.cache_write,
+              messageCount: r.count,
+              startTime: r.start,
+              lastActive: r.last,
+            }));
+            if (!this.activeSessionId && this.sessions.length > 0) {
+              this.activeSessionId = this.sessions[0].id;
+            }
+            this._onMetricsChanged.fire(this.getMetrics());
+          } catch {
+            tryExec(index + 1);
+          }
+        },
+      );
     };
-  }
 
-  dispose(): void {
-    if (this.pollTimer) { clearInterval(this.pollTimer); }
-    this._onMetricsChanged.dispose();
+    tryExec(0);
   }
 }

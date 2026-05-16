@@ -21,7 +21,7 @@ Activates the extension, creates services, wires metric events, registers comman
 
 ### `src/services/detection.ts`
 
-Discovers known AI tools and active unknown AI-like extensions. Specialized providers are used when a tool has readable local data. Generic providers are used for basic activity tracking.
+Discovers known AI tools and active unknown AI-like extensions. Specialized providers are used when a tool has readable local data. Generic providers are used for basic activity tracking. Manual refresh triggers a provider-level rescan instead of a UI-only redraw.
 
 ### `src/providers/*`
 
@@ -33,7 +33,7 @@ Combines provider metrics into an `AggregatedMetrics` object. The UI consumes th
 
 ### `src/services/persistence.ts`
 
-Stores rolling local snapshots for recent activity summaries. This is extension-local history, not uploaded telemetry.
+Stores rolling local snapshots for recent activity summaries. Daily history is rebuilt from snapshot deltas so the timeline reflects accumulated activity instead of only the last observed counters. This is extension-local history, not uploaded telemetry.
 
 ### `src/ui/status-bar.ts`
 
@@ -41,7 +41,7 @@ Shows a compact status bar summary and a detailed tooltip for each readable AI t
 
 ### `src/ui/webview-panel.ts`
 
-Renders the activity bar dashboard, provider cards, token summaries, context-window progress, session dropdowns, and seven-day trends.
+Renders the activity bar dashboard, provider cards, token summaries, context-window progress, session dropdowns, and seven-day trends. The webview is protected with a CSP and limited resource roots.
 
 ## Provider Contract
 

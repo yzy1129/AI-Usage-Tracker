@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.0] - 2026-05-16
+
+### Added
+- Real provider refresh flow instead of UI-only redraws
+- Incremental daily history aggregation with automated regression tests
+- ESLint checks and GitHub Actions CI validation
+- Multi-root workspace scanning for Claude Code, Codex, and GitHub Copilot
+- Cross-platform Kilo database path and Python runtime fallbacks
+
+### Changed
+- Status and duration semantics are now based on recent observed activity instead of permanently active sessions
+- Dashboard timeline now updates from persisted history changes in real time
+- Webview resource roots were narrowed and CSP/nonce protection was added
+- Build and test scripts now use symlink-safe Node entrypoints to avoid local Windows `EPERM` failures
+
 ## [0.4.1] - 2026-05-16
 
 ### Fixed

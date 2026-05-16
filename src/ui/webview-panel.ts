@@ -8,16 +8,23 @@ import { KNOWN_AI_EXTENSIONS } from '../constants';
 
 interface IconMap { [toolId: string]: string; }
 
-export class DashboardPanel implements vscode.WebviewViewProvider {
+export class DashboardPanel implements vscode.WebviewViewProvider, vscode.Disposable {
   public static readonly viewType = 'aiTracker.dashboard';
   private view?: vscode.WebviewView;
   private latestMetrics?: AggregatedMetrics;
+  private disposables: vscode.Disposable[] = [];
 
   constructor(
     private context: vscode.ExtensionContext,
     private persistence: PersistenceService,
     private detection: DetectionService
-  ) {}
+  ) {
+    this.disposables.push(
+      this.persistence.onHistoryChanged((history) => {
+        this.postHistory(history);
+      }),
+    );
+  }
 
   resolveWebviewView(webviewView: vscode.WebviewView) {
     this.view = webviewView;
@@ -25,10 +32,11 @@ export class DashboardPanel implements vscode.WebviewViewProvider {
       enableScripts: true,
       localResourceRoots: this.getResourceRoots(),
     };
-    webviewView.webview.html = this.getHtml();
+    webviewView.webview.html = this.getHtml(webviewView.webview);
 
     const icons = this.collectIcons(webviewView.webview);
     webviewView.webview.postMessage({ type: 'icons', data: icons });
+    this.postHistory(this.persistence.getDailySummaries(7));
 
     if (this.latestMetrics) {
       this.postMetrics(this.latestMetrics);
@@ -36,8 +44,7 @@ export class DashboardPanel implements vscode.WebviewViewProvider {
 
     webviewView.webview.onDidReceiveMessage((msg) => {
       if (msg.type === 'requestHistory') {
-        const history = this.persistence.getDailySummaries(7);
-        webviewView.webview.postMessage({ type: 'history', data: history });
+        this.postHistory(this.persistence.getDailySummaries(7));
       }
       if (msg.type === 'switchSession') {
         vscode.commands.executeCommand('aiTracker.switchSession', msg.toolId, msg.sessionId);
@@ -45,6 +52,12 @@ export class DashboardPanel implements vscode.WebviewViewProvider {
       if (msg.type === 'requestIcons') {
         const ic = this.collectIcons(webviewView.webview);
         webviewView.webview.postMessage({ type: 'icons', data: ic });
+      }
+    });
+
+    webviewView.onDidDispose(() => {
+      if (this.view === webviewView) {
+        this.view = undefined;
       }
     });
   }
@@ -60,12 +73,32 @@ export class DashboardPanel implements vscode.WebviewViewProvider {
     }
   }
 
-  private getResourceRoots(): vscode.Uri[] {
-    const roots: vscode.Uri[] = [];
-    for (const ext of vscode.extensions.all) {
-      roots.push(ext.extensionUri);
+  private postHistory(history: ReturnType<PersistenceService['getDailySummaries']>) {
+    if (this.view) {
+      this.view.webview.postMessage({ type: 'history', data: history });
     }
-    return roots;
+  }
+
+  private getResourceRoots(): vscode.Uri[] {
+    const roots = new Map<string, vscode.Uri>();
+    roots.set(this.context.extensionUri.toString(), this.context.extensionUri);
+
+    const extensionIds = new Set<string>();
+    for (const def of KNOWN_AI_EXTENSIONS) {
+      def.extensionIds.forEach((id) => extensionIds.add(id));
+    }
+    for (const provider of this.detection.getProviders()) {
+      provider.extensionIds.forEach((id) => extensionIds.add(id));
+    }
+
+    for (const extensionId of extensionIds) {
+      const ext = this.findExtensionById(extensionId);
+      if (ext) {
+        roots.set(ext.extensionUri.toString(), ext.extensionUri);
+      }
+    }
+
+    return Array.from(roots.values());
   }
 
   private collectIcons(webview: vscode.Webview): IconMap {
@@ -109,13 +142,15 @@ export class DashboardPanel implements vscode.WebviewViewProvider {
     return vscode.extensions.all.find(ext => ext.id.toLowerCase() === target);
   }
 
-  private getHtml(): string {
+  private getHtml(webview: vscode.Webview): string {
+    const nonce = getNonce();
     return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<style>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; style-src ${webview.cspSource} 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
+<style nonce="${nonce}">
 * { margin: 0; padding: 0; box-sizing: border-box; }
 :root {
   --bg: var(--vscode-sideBar-background);
@@ -282,7 +317,7 @@ body {
   <div class="timeline" id="timeline"><div class="empty"><div class="empty-icon">📊</div>暂无历史数据</div></div>
 </div>
 
-<script>
+<script nonce="${nonce}">
 const vscode = acquireVsCodeApi();
 vscode.postMessage({ type: 'requestHistory' });
 vscode.postMessage({ type: 'requestIcons' });
@@ -334,6 +369,13 @@ window.addEventListener('message', e => {
   if (e.data.type === 'icons') { iconMap = e.data.data; if (lastMetrics) renderMetrics(lastMetrics); }
 });
 
+document.addEventListener('change', (event) => {
+  const target = event.target;
+  if (target && target.matches && target.matches('.session-select[data-tool]')) {
+    switchSession(target);
+  }
+});
+
 let lastMetrics = null;
 
 function renderMetrics(m) {
@@ -342,7 +384,7 @@ function renderMetrics(m) {
 
   const primary = m.providers.find(p => p.toolId === m.primaryProvider);
   const ctxSec = document.getElementById('ctx-section');
-  if (primary && primary.contextWindowUsed && primary.contextWindowMax) {
+  if (primary && typeof primary.contextWindowUsed === 'number' && primary.contextWindowMax) {
     ctxSec.style.display = '';
     const pct = Math.min(100, Math.round(primary.contextWindowUsed/primary.contextWindowMax*100));
     document.getElementById('ctx-model').textContent = primary.model || primary.displayName;
@@ -394,7 +436,7 @@ function renderMetrics(m) {
       +'</div>';
     let sessionHtml = '';
     if (p.sessions && p.sessions.length > 1) {
-      sessionHtml = '<select class="session-select" data-tool="'+p.toolId+'" onchange="switchSession(this)">'
+      sessionHtml = '<select class="session-select" data-tool="'+p.toolId+'">'
         + p.sessions.map(s =>
           '<option value="'+s.id+'"'+(s.id===p.activeSessionId?' selected':'')+'>'+
           esc(s.title||s.id.slice(0,8))+' · '+esc(s.model || p.model || '未知模型')+' · '+timeAgo(s.lastActive)+'</option>'
@@ -447,4 +489,18 @@ function renderTimeline(summaries) {
 </body>
 </html>`;
   }
+
+  dispose(): void {
+    this.disposables.forEach((disposable) => disposable.dispose());
+    this.disposables = [];
+  }
+}
+
+function getNonce(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let nonce = '';
+  for (let i = 0; i < 32; i++) {
+    nonce += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return nonce;
 }
